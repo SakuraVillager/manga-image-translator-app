@@ -27,7 +27,7 @@ class HorizontalTextRenderer(
     private var _isReady = false
     override val isReady: Boolean get() = _isReady
 
-    private var typeface: Typeface = Typeface.DEFAULT
+    private var typeface: Typeface? = null
 
     override suspend fun prepare() {
         typeface = try {

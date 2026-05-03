@@ -9,7 +9,9 @@
     "ses_21212ec9cffeldIu04RuhPgTvI",
     "ses_21212a735ffeIJ2Ye2ciNKxGcD",
     "ses_212125e81ffewe3FQYDXDhjcq9",
-    "ses_212066a90ffeMDOwqze9Vdux0u"
+    "ses_212066a90ffeMDOwqze9Vdux0u",
+    "ses_211fda4b2ffek5BiuPLiNw0Lhr",
+    "ses_211fd32c4ffeal9xBGSNbVBCJ8"
   ],
   "session_origins": {
     "ses_21243e3deffefZHr3QfensLhFm": "direct",
@@ -19,7 +21,9 @@
     "ses_21212ec9cffeldIu04RuhPgTvI": "appended",
     "ses_21212a735ffeIJ2Ye2ciNKxGcD": "appended",
     "ses_212125e81ffewe3FQYDXDhjcq9": "appended",
-    "ses_212066a90ffeMDOwqze9Vdux0u": "appended"
+    "ses_212066a90ffeMDOwqze9Vdux0u": "appended",
+    "ses_211fda4b2ffek5BiuPLiNw0Lhr": "appended",
+    "ses_211fd32c4ffeal9xBGSNbVBCJ8": "appended"
   },
   "plan_name": "plan4-pipeline-completion",
   "agent": "atlas",
@@ -28,10 +32,10 @@
       "task_key": "final-wave:f1",
       "task_label": "F1",
       "task_title": "**Plan Compliance Audit** — `oracle`",
-      "session_id": "ses_212066a90ffeMDOwqze9Vdux0u",
+      "session_id": "ses_211fda4b2ffek5BiuPLiNw0Lhr",
       "agent": "Sisyphus-Junior",
-      "category": "deep",
-      "updated_at": "2026-05-03T13:22:22.721Z"
+      "category": "quick",
+      "updated_at": "2026-05-03T13:44:58.510Z"
     }
   }
 }

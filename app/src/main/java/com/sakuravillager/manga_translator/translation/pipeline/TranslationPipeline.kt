@@ -39,6 +39,11 @@ class TranslationPipeline(
             _progress.value = TranslationProgress.Loading("Preparing models...")
             detector.prepare()
             recognizer.prepare()
+            merger.prepare()
+            translator.prepare()
+            maskRefiner.prepare()
+            inpainter.prepare()
+            renderer.prepare()
 
             // Step 1: Detection
             _progress.value = TranslationProgress.Processing("Detecting text...", 0.1f)
@@ -87,7 +92,8 @@ class TranslationPipeline(
 
             // Step 7: Rendering
             _progress.value = TranslationProgress.Processing("Rendering text...", 0.85f)
-            ctx.imgRendered = renderer.render(ctx.imgInpainted!!, ctx.textRegions, config.renderer)
+            val safeInpainted = ctx.imgInpainted?.copy(Bitmap.Config.ARGB_8888, false) ?: ctx.imgInpainted
+            ctx.imgRendered = renderer.render(safeInpainted!!, ctx.textRegions, config.renderer)
 
             // Step 8: Finalize
             val result = ctx.imgRendered ?: inputBitmap
@@ -101,6 +107,11 @@ class TranslationPipeline(
         } finally {
             detector.release()
             recognizer.release()
+            merger.release()
+            translator.release()
+            maskRefiner.release()
+            inpainter.release()
+            renderer.release()
         }
     }
 

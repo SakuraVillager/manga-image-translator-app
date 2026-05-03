@@ -17,6 +17,9 @@ import com.sakuravillager.manga_translator.translation.ocr.Model48pxTextRecogniz
 import com.sakuravillager.manga_translator.translation.ocr.OcrDictionary
 import com.sakuravillager.manga_translator.translation.onnx.OnnxSessionManager
 import com.sakuravillager.manga_translator.translation.pipeline.TranslationPipeline
+import com.sakuravillager.manga_translator.translation.inpaint.SimpleFillInpainter
+import com.sakuravillager.manga_translator.translation.mask.OpenCVMaskRefiner
+import com.sakuravillager.manga_translator.translation.render.HorizontalTextRenderer
 import com.sakuravillager.manga_translator.translation.stub.NoOpInpainter
 import com.sakuravillager.manga_translator.translation.stub.NoOpMaskRefiner
 import com.sakuravillager.manga_translator.translation.stub.NoOpTextDetector
@@ -86,9 +89,10 @@ val translationModule = module {
         }
     }
 
-    single<MaskRefiner> { NoOpMaskRefiner() }
-    single<Inpainter> { NoOpInpainter() }
-    single<TextRenderer> { NoOpTextRenderer() }
+    // Real implementations replacing NoOp stubs
+    factory<MaskRefiner> { OpenCVMaskRefiner() }
+    factory<Inpainter> { SimpleFillInpainter() }
+    factory<TextRenderer> { HorizontalTextRenderer(androidContext()) }
 
     // Default config
     single { TranslationConfig() }

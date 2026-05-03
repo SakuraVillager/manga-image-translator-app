@@ -17,8 +17,8 @@ data class TextBlock(
     val alignment: TextAlignment = TextAlignment.AUTO,
     val lineSpacing: Float = 0f,
 ) {
-    val isHorizontal: Boolean get() = true
-    val isVertical: Boolean get() = false
+    val isHorizontal: Boolean get() = direction != TextDirection.VERTICAL
+    val isVertical: Boolean get() = direction == TextDirection.VERTICAL
     val minRect: RectF get() {
         val allPoints = lines.flatten()
         if (allPoints.isEmpty()) return RectF()
@@ -34,5 +34,8 @@ data class TextBlock(
         }
         return RectF(minX, minY, maxX, maxY)
     }
-    val center: PointF get() = PointF()
+    val center: PointF get() {
+        val r = minRect
+        return PointF(r.centerX(), r.centerY())
+    }
 }

@@ -1,5 +1,6 @@
 package com.sakuravillager.manga_translator.translation.di
 
+import android.app.Application
 import com.sakuravillager.manga_translator.translation.api.Inpainter
 import com.sakuravillager.manga_translator.translation.api.MaskRefiner
 import com.sakuravillager.manga_translator.translation.api.TextDetector
@@ -7,23 +8,27 @@ import com.sakuravillager.manga_translator.translation.api.TextRecognizer
 import com.sakuravillager.manga_translator.translation.api.TextRenderer
 import com.sakuravillager.manga_translator.translation.api.TextlineMerger
 import com.sakuravillager.manga_translator.translation.api.Translator
+import com.sakuravillager.manga_translator.translation.data.config.DetectorConfig
+import com.sakuravillager.manga_translator.translation.data.config.DetectorType
+import com.sakuravillager.manga_translator.translation.data.config.OcrConfig
+import com.sakuravillager.manga_translator.translation.data.config.OcrEngineType
 import com.sakuravillager.manga_translator.translation.data.config.TranslationConfig
+import com.sakuravillager.manga_translator.translation.inpaint.SimpleFillInpainter
+import com.sakuravillager.manga_translator.translation.mask.OpenCVMaskRefiner
+import com.sakuravillager.manga_translator.translation.merge.DefaultTextlineMerger
 import com.sakuravillager.manga_translator.translation.pipeline.TranslationPipeline
-import com.sakuravillager.manga_translator.translation.stub.NoOpInpainter
-import com.sakuravillager.manga_translator.translation.stub.NoOpMaskRefiner
+import com.sakuravillager.manga_translator.translation.render.HorizontalTextRenderer
 import com.sakuravillager.manga_translator.translation.stub.NoOpTextDetector
 import com.sakuravillager.manga_translator.translation.stub.NoOpTextRecognizer
-import com.sakuravillager.manga_translator.translation.stub.NoOpTextRenderer
-import com.sakuravillager.manga_translator.translation.stub.NoOpTextlineMerger
-import com.sakuravillager.manga_translator.translation.stub.NoOpTranslator
 import com.sakuravillager.manga_translator.translation.translator.GptTranslator
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
+import org.koin.android.ext.koin.androidContext
 import org.koin.core.context.startKoin
 import org.koin.core.context.stopKoin
+import org.koin.dsl.module
 import org.koin.test.KoinTest
-import org.koin.test.check.checkModules
 import org.koin.test.get
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -33,8 +38,19 @@ class TranslationModuleTest : KoinTest {
 
     @Before
     fun setUp() {
+        // Override module to use NoOp-friendly config for detector and OCR,
+        // avoiding ONNX Runtime dependency in pure unit tests.
+        val overrideModule = module(override = true) {
+            single<TranslationConfig> {
+                TranslationConfig(
+                    detector = DetectorConfig(detector = DetectorType.NONE),
+                    ocr = OcrConfig(ocrEngine = OcrEngineType.MODEL_32PX),
+                )
+            }
+        }
         startKoin {
-            modules(translationModule)
+            androidContext(Application())
+            modules(translationModule, overrideModule)
         }
     }
 
@@ -45,12 +61,14 @@ class TranslationModuleTest : KoinTest {
 
     @Test
     fun `verify all module definitions resolve`() {
-        // checkModules manages its own Koin lifecycle internally.
-        // Stop setUp() context first to avoid double-start conflict.
-        stopKoin()
-        checkModules {
-            modules(translationModule)
-        }
+        assertNotNull(get<TextDetector>())
+        assertNotNull(get<TextRecognizer>())
+        assertNotNull(get<TextlineMerger>())
+        assertNotNull(get<Translator>())
+        assertNotNull(get<MaskRefiner>())
+        assertNotNull(get<Inpainter>())
+        assertNotNull(get<TextRenderer>())
+        assertNotNull(get<TranslationPipeline>())
     }
 
     @Test
@@ -66,9 +84,9 @@ class TranslationModuleTest : KoinTest {
     }
 
     @Test
-    fun `resolve TextlineMerger returns NoOpTextlineMerger`() {
+    fun `resolve TextlineMerger returns DefaultTextlineMerger`() {
         val merger = get<TextlineMerger>()
-        assertTrue(merger is NoOpTextlineMerger)
+        assertTrue(merger is DefaultTextlineMerger)
     }
 
     @Test
@@ -78,21 +96,21 @@ class TranslationModuleTest : KoinTest {
     }
 
     @Test
-    fun `resolve MaskRefiner returns NoOpMaskRefiner`() {
+    fun `resolve MaskRefiner returns OpenCVMaskRefiner`() {
         val refiner = get<MaskRefiner>()
-        assertTrue(refiner is NoOpMaskRefiner)
+        assertTrue(refiner is OpenCVMaskRefiner)
     }
 
     @Test
-    fun `resolve Inpainter returns NoOpInpainter`() {
+    fun `resolve Inpainter returns SimpleFillInpainter`() {
         val inpainter = get<Inpainter>()
-        assertTrue(inpainter is NoOpInpainter)
+        assertTrue(inpainter is SimpleFillInpainter)
     }
 
     @Test
-    fun `resolve TextRenderer returns NoOpTextRenderer`() {
+    fun `resolve TextRenderer returns HorizontalTextRenderer`() {
         val renderer = get<TextRenderer>()
-        assertTrue(renderer is NoOpTextRenderer)
+        assertTrue(renderer is HorizontalTextRenderer)
     }
 
     @Test
