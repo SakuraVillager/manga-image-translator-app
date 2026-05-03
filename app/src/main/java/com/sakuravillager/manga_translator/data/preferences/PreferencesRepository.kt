@@ -63,33 +63,9 @@ class PreferencesRepository(
         }
     }
 
-    suspend fun updateTranslator(translator: String) {
-        dataStore.edit { preferences ->
-            preferences[PreferencesKeys.TRANSLATOR] = translator
-        }
-    }
-
     suspend fun updateTextDirection(textDirection: String) {
         dataStore.edit { preferences ->
             preferences[PreferencesKeys.TEXT_DIRECTION] = textDirection
-        }
-    }
-
-    suspend fun updateTextDetector(textDetector: String) {
-        dataStore.edit { preferences ->
-            preferences[PreferencesKeys.TEXT_DETECTOR] = textDetector
-        }
-    }
-
-    suspend fun updateOcrEngine(ocrEngine: String) {
-        dataStore.edit { preferences ->
-            preferences[PreferencesKeys.OCR_ENGINE] = ocrEngine
-        }
-    }
-
-    suspend fun updateImageRepair(imageRepair: String) {
-        dataStore.edit { preferences ->
-            preferences[PreferencesKeys.IMAGE_REPAIR] = imageRepair
         }
     }
 
@@ -123,11 +99,7 @@ class PreferencesRepository(
         val PURE_BLACK_DARK_MODE = booleanPreferencesKey("pure_black_dark_mode")
         val APP_LANGUAGE = stringPreferencesKey("app_language")
         val TABLET_INTERFACE = stringPreferencesKey("tablet_interface")
-        val TRANSLATOR = stringPreferencesKey("translator")
         val TEXT_DIRECTION = stringPreferencesKey("text_direction")
-        val TEXT_DETECTOR = stringPreferencesKey("text_detector")
-        val OCR_ENGINE = stringPreferencesKey("ocr_engine")
-        val IMAGE_REPAIR = stringPreferencesKey("image_repair")
         val TRANSLATOR_TYPE = stringPreferencesKey("translator_type")
         val DETECTOR_TYPE = stringPreferencesKey("detector_type")
         val OCR_ENGINE_TYPE = stringPreferencesKey("ocr_engine_type")

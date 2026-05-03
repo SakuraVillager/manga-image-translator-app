@@ -6,7 +6,7 @@ import com.sakuravillager.manga_translator.translation.data.TextBlock
 import com.sakuravillager.manga_translator.translation.data.TextDirection
 import kotlin.math.abs
 import kotlin.math.exp
-import kotlin.math.log
+import kotlin.math.ln
 import kotlin.math.PI
 
 /**
@@ -111,7 +111,7 @@ class DefaultTextlineMerger : TextlineMerger {
         val totalArea = sorted.sumOf { it.area.toDouble() }
         val weightedLogProb = sorted.sumOf { quad ->
             if (quad.probability > 0f) {
-                quad.area.toDouble() * log(quad.probability.toDouble())
+                quad.area.toDouble() * ln(quad.probability.toDouble())
             } else {
                 0.0
             }

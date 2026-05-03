@@ -68,7 +68,7 @@ object TensorConverter {
     fun extractFloatArray(result: OrtSession.Result, index: Int): Array<FloatArray> {
         val tensor = result.get(index) as OnnxTensor
         val buffer = tensor.floatBuffer
-        val shape = tensor.shape
+        val shape = tensor.info.shape
         val rows = shape[0].toInt()
         val cols = shape[1].toInt()
         return Array(rows) { i ->

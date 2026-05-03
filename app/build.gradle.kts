@@ -90,6 +90,7 @@ dependencies {
     // Koin Test
     testImplementation(libs.koin.test)
     testImplementation(libs.koin.test.junit4)
+    androidTestImplementation(libs.koin.test)
 
     // Coroutines Test
     testImplementation(libs.coroutines.test)

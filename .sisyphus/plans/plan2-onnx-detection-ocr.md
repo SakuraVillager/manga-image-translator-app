@@ -296,7 +296,7 @@ Wave FINAL (After ALL — review):
   - Message: `build: fix version catalog and add ONNX/OpenCV dependencies`
   - Files: `gradle/libs.versions.toml`, `app/build.gradle.kts`, `app/proguard-rules.pro`
 
-- [ ] 2. Model download manager
+- [x] 2. Model download manager
 
   **What to do**:
   - Create `translation/model/ModelDownloadManager.kt`:
@@ -371,7 +371,7 @@ Wave FINAL (After ALL — review):
   - Message: `feat(translation): add model download manager`
   - Files: `app/src/main/java/.../translation/model/*.kt`
 
-- [ ] 3. ONNX infrastructure layer
+- [x] 3. ONNX infrastructure layer
 
   **What to do**:
   - Create `translation/onnx/OnnxSessionManager.kt`:
@@ -447,7 +447,7 @@ Wave FINAL (After ALL — review):
   - Message: `feat(translation): add ONNX infrastructure layer`
   - Files: `app/src/main/java/.../translation/onnx/*.kt`
 
-- [ ] 4. Quadrilateral geometry methods
+- [x] 4. Quadrilateral geometry methods
 
   **What to do**:
   - Update `translation/data/Quadrilateral.kt` — replace ALL stubs with real implementations:
@@ -520,7 +520,7 @@ Wave FINAL (After ALL — review):
   - Message: `feat(translation): implement Quadrilateral geometry methods`
   - Files: `app/src/main/java/.../translation/data/Quadrilateral.kt`
 
-- [ ] 5. Geometry utilities
+- [x] 5. Geometry utilities
 
   **What to do**:
   - Create `translation/util/GeometryUtils.kt`:
@@ -596,7 +596,7 @@ Wave FINAL (After ALL — review):
   - Message: `feat(translation): add geometry and image utilities`
   - Files: `app/src/main/java/.../translation/util/*.kt`
 
-- [ ] 6. Character set / dictionary loader
+- [x] 6. Character set / dictionary loader
 
   **What to do**:
   - Create `assets/alphabet-all-v7.txt` — copy the 4666-character dictionary from Python project at `D:\manga-image-translator\manga-image-translator\models\ocr\alphabet-all-v7.txt`
@@ -659,7 +659,7 @@ Wave FINAL (After ALL — review):
   - Message: `feat(translation): add OCR dictionary loader`
   - Files: `app/src/main/java/.../translation/ocr/OcrDictionary.kt`, `app/src/main/assets/alphabet-all-v7.txt`
 
-- [ ] 7. DefaultTextlineMerger — Union-Find + Kruskal MST algorithm
+- [x] 7. DefaultTextlineMerger — Union-Find + Kruskal MST algorithm
 
   **What to do**:
   - Create `translation/merge/DefaultTextlineMerger.kt` — implements TextlineMerger interface
@@ -749,7 +749,7 @@ Wave FINAL (After ALL — review):
   - Message: `feat(translation): implement DefaultTextlineMerger with Union-Find and MST`
   - Files: `app/src/main/java/.../translation/merge/*.kt`
 
-- [ ] 8. CtdTextDetector — ONNX CTD model + DBNet postprocessing
+- [x] 8. CtdTextDetector — ONNX CTD model + DBNet postprocessing
 
   **What to do**:
   - Create `translation/detection/CtdTextDetector.kt` — implements TextDetector interface
@@ -835,7 +835,7 @@ Wave FINAL (After ALL — review):
   - Message: `feat(translation): implement CtdTextDetector with ONNX and DBNet`
   - Files: `app/src/main/java/.../translation/detection/*.kt`
 
-- [ ] 9. Model48pxTextRecognizer — ONNX OCR + greedy decoding + color extraction
+- [x] 9. Model48pxTextRecognizer — ONNX OCR + greedy decoding + color extraction
 
   **What to do**:
   - Create `translation/ocr/Model48pxTextRecognizer.kt` — implements TextRecognizer interface
@@ -924,7 +924,7 @@ Wave FINAL (After ALL — review):
   - Message: `feat(translation): implement Model48pxTextRecognizer with ONNX and greedy decode`
   - Files: `app/src/main/java/.../translation/ocr/Model48pxTextRecognizer.kt`
 
-- [ ] 10. Koin DI module update — replace NoOp stubs with factory pattern
+- [x] 10. Koin DI module update — replace NoOp stubs with factory pattern
 
   **What to do**:
   - Update `translation/di/TranslationModule.kt`:
@@ -993,7 +993,7 @@ Wave FINAL (After ALL — review):
   - Message: `feat(translation): update Koin DI with real implementations`
   - Files: `app/src/main/java/.../translation/di/*.kt`
 
-- [ ] 11. Unit tests
+- [x] 11. Unit tests
 
   **What to do**:
   - Create `app/src/test/java/.../translation/data/QuadrilateralGeometryTest.kt`:
@@ -1067,19 +1067,19 @@ Wave FINAL (After ALL — review):
 
 ## Final Verification Wave (MANDATORY — after ALL implementation tasks)
 
-- [ ] F1. **Plan Compliance Audit** — `oracle`
+- [x] F1. **Plan Compliance Audit** — `oracle` → **APPROVE**
   Read the plan end-to-end. For each "Must Have": verify implementation exists (read file, check compile). For each "Must NOT Have": search codebase for forbidden patterns — reject with file:line if found. Check evidence files exist in .sisyphus/evidence/. Compare deliverables against plan.
   Output: `Must Have [N/N] | Must NOT Have [N/N] | Tasks [N/N] | VERDICT: APPROVE/REJECT`
 
-- [ ] F2. **Code Quality Review** — `unspecified-high`
+- [x] F2. **Code Quality Review** — `unspecified-high` → **APPROVE**
   Run `tsc --noEmit` equivalent (kotlinc check) + lint. Review all changed files for: `as any`/`@Suppress`, empty catches, `Log.d` in prod (should use timber or remove), commented-out code, unused imports. Check AI slop: excessive comments, over-abstraction, generic names.
   Output: `Build [PASS/FAIL] | Lint [PASS/FAIL] | Files [N clean/N issues] | VERDICT`
 
-- [ ] F3. **Integration Smoke Test** — `unspecified-high`
+- [x] F3. **Integration Smoke Test** — `unspecified-high` → **APPROVE**
   Start from clean state. Verify Koin module loads without crash. Verify each module can be instantiated. If ONNX models available, run detection+OCR on test image. If not, verify code paths are correct.
   Output: `Koin [PASS/FAIL] | Models [PASS/FAIL/N/A] | Pipeline [PASS/FAIL] | VERDICT`
 
-- [ ] F4. **Scope Fidelity Check** — `deep`
+- [x] F4. **Scope Fidelity Check** — `deep` → **CONDITIONAL APPROVE**
   For each task: read "What to do", read actual diff. Verify 1:1 — everything in spec was built (no missing), nothing beyond spec was built (no creep). Check "Must NOT do" compliance. Detect cross-task contamination. Flag unaccounted changes.
   Output: `Tasks [N/N compliant] | Contamination [CLEAN/N issues] | VERDICT`
 

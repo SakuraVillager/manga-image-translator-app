@@ -1,23 +1,29 @@
 {
-  "active_plan": "E:\\yhz\\Projects\\manga-image-translator-app\\.sisyphus\\plans\\plan2-onnx-detection-ocr.md",
-  "started_at": "2026-05-03T07:54:58.427Z",
+  "active_plan": "E:\\yhz\\Projects\\manga-image-translator-app\\.sisyphus\\plans\\plan4-pipeline-completion.md",
+  "started_at": "2026-05-03T12:45:20.668Z",
   "session_ids": [
-    "ses_2140596aeffe5sQLDvA9lpVQM6"
+    "ses_21243e3deffefZHr3QfensLhFm",
+    "ses_21219cd1dffeVKFrn73a19PvAP",
+    "ses_212195ca5ffe24Tj221Xh91dlp",
+    "ses_21219166dffefRjOJA7JPaiYwZ"
   ],
   "session_origins": {
-    "ses_2140596aeffe5sQLDvA9lpVQM6": "direct"
+    "ses_21243e3deffefZHr3QfensLhFm": "direct",
+    "ses_21219cd1dffeVKFrn73a19PvAP": "appended",
+    "ses_212195ca5ffe24Tj221Xh91dlp": "appended",
+    "ses_21219166dffefRjOJA7JPaiYwZ": "appended"
   },
-  "plan_name": "plan2-onnx-detection-ocr",
+  "plan_name": "plan4-pipeline-completion",
   "agent": "atlas",
   "task_sessions": {
-    "todo:0": {
-      "task_key": "todo:0",
-      "task_label": "0",
-      "task_title": "Fix missing data models — Quadrilateral, TextBlock, DetectionResult, TranslationContext, TextDirection, TextAlignment",
-      "session_id": "ses_21328a14cffeTvn0duGkakH1an",
+    "final-wave:f1": {
+      "task_key": "final-wave:f1",
+      "task_label": "F1",
+      "task_title": "**Plan Compliance Audit** — `oracle`",
+      "session_id": "ses_212195ca5ffe24Tj221Xh91dlp",
       "agent": "Sisyphus-Junior",
       "category": "quick",
-      "updated_at": "2026-05-03T08:27:11.807Z"
+      "updated_at": "2026-05-03T12:59:15.443Z"
     }
   }
 }
