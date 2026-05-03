@@ -93,6 +93,30 @@ class PreferencesRepository(
         }
     }
 
+    suspend fun updateTranslatorType(translatorType: String) {
+        dataStore.edit { preferences ->
+            preferences[PreferencesKeys.TRANSLATOR_TYPE] = translatorType
+        }
+    }
+
+    suspend fun updateDetectorType(detectorType: String) {
+        dataStore.edit { preferences ->
+            preferences[PreferencesKeys.DETECTOR_TYPE] = detectorType
+        }
+    }
+
+    suspend fun updateOcrEngineType(ocrEngineType: String) {
+        dataStore.edit { preferences ->
+            preferences[PreferencesKeys.OCR_ENGINE_TYPE] = ocrEngineType
+        }
+    }
+
+    suspend fun updateInpainterType(inpainterType: String) {
+        dataStore.edit { preferences ->
+            preferences[PreferencesKeys.INPAINTER_TYPE] = inpainterType
+        }
+    }
+
     companion object PreferencesKeys {
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val COLOR_SCHEME = stringPreferencesKey("color_scheme")

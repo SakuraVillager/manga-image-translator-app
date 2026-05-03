@@ -500,7 +500,7 @@ Wave 5 (验证)
 - [ ] Settings 设置持久化到 PreferencesRepository
 - [ ] 所有 "必须不包含" 项未出现
 
-- [ ] T8. **修复 TranslationPipeline prepare/release + Bitmap 防御**
+- [x] T8. **修复 TranslationPipeline prepare/release + Bitmap 防御**
 
   **What to do**:
   - 在 `translate()` 方法开头，对所有 7 个模块调用 `prepare()`（不只是 detector/recognizer）
@@ -566,7 +566,7 @@ Wave 5 (验证)
   - Message: `fix(pipeline): prepare/release all 7 modules, add defensive bitmap copy, fix TextBlock stubs`
   - Files: `TranslationPipeline.kt`, `DefaultTextlineMerger.kt`, `TextBlock.kt`
 
-- [ ] T9. **更新 TranslationModule DI 注册**
+- [x] T9. **更新 TranslationModule DI 注册**
 
   **What to do**:
   - 在 `TranslationModule.kt` 中添加新实现的工厂绑定：
@@ -629,7 +629,7 @@ Wave 5 (验证)
   - Message: `feat(di): register OpenCVMaskRefiner, SimpleFillInpainter, HorizontalTextRenderer in Koin`
   - Files: `TranslationModule.kt`, `TranslationModuleTest.kt`
 
-- [ ] T10. **WorkspaceViewModel 注入 TranslationPipeline**
+- [x] T10. **WorkspaceViewModel 注入 TranslationPipeline**
 
   **What to do**:
   - 修改 `WorkspaceViewModel.kt`：移除 mock 数据，添加 `private val pipeline: TranslationPipeline` 构造函数参数
@@ -685,7 +685,7 @@ Wave 5 (验证)
   - Message: `feat(ui): inject TranslationPipeline into WorkspaceViewModel, replace mock data`
   - Files: `WorkspaceViewModel.kt`
 
-- [ ] T11. **SettingsTranslationScreen 连接 PreferencesRepository**
+- [x] T11. **SettingsTranslationScreen 连接 PreferencesRepository**
 
   **What to do**:
   - 修改 `SettingsTranslationScreen.kt`：
