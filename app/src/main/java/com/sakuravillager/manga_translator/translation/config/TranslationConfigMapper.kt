@@ -19,10 +19,16 @@ object TranslationConfigMapper {
 
     fun AppPreferences.toTranslationConfig(): TranslationConfig {
         return TranslationConfig(
-            detector = DetectorConfig(detector = parseDetectorType(textDetector)),
-            ocr = OcrConfig(ocrEngine = parseOcrEngineType(ocrEngine)),
-            translator = TranslatorConfig(translator = parseTranslatorType(translator)),
-            inpainter = InpainterConfig(inpainter = parseInpainterType(imageRepair)),
+            detector = DetectorConfig(detector = parseDetectorType(detectorType)),
+            ocr = OcrConfig(ocrEngine = parseOcrEngineType(ocrEngineType)),
+            translator = TranslatorConfig(
+                translator = parseTranslatorType(translatorType),
+                targetLanguage = targetLanguage,
+                apiKey = apiKey,
+                apiBase = apiBase,
+                model = modelName,
+            ),
+            inpainter = InpainterConfig(inpainter = parseInpainterType(inpainterType)),
             renderer = RendererConfig(direction = parseTextDirection(textDirection)),
         )
     }

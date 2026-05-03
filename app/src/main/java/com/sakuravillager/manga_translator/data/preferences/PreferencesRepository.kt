@@ -20,11 +20,15 @@ class PreferencesRepository(
                 pureBlackDarkMode = preferences[PreferencesKeys.PURE_BLACK_DARK_MODE] ?: AppPreferences.DEFAULT_PURE_BLACK_DARK_MODE,
                 appLanguage = preferences[PreferencesKeys.APP_LANGUAGE] ?: AppPreferences.DEFAULT_APP_LANGUAGE,
                 tabletInterface = preferences[PreferencesKeys.TABLET_INTERFACE] ?: AppPreferences.DEFAULT_TABLET_INTERFACE,
-                translator = preferences[PreferencesKeys.TRANSLATOR] ?: AppPreferences.DEFAULT_TRANSLATOR,
+                translatorType = preferences[PreferencesKeys.TRANSLATOR_TYPE] ?: AppPreferences.DEFAULT_TRANSLATOR_TYPE,
                 textDirection = preferences[PreferencesKeys.TEXT_DIRECTION] ?: AppPreferences.DEFAULT_TEXT_DIRECTION,
-                textDetector = preferences[PreferencesKeys.TEXT_DETECTOR] ?: AppPreferences.DEFAULT_TEXT_DETECTOR,
-                ocrEngine = preferences[PreferencesKeys.OCR_ENGINE] ?: AppPreferences.DEFAULT_OCR_ENGINE,
-                imageRepair = preferences[PreferencesKeys.IMAGE_REPAIR] ?: AppPreferences.DEFAULT_IMAGE_REPAIR
+                detectorType = preferences[PreferencesKeys.DETECTOR_TYPE] ?: AppPreferences.DEFAULT_DETECTOR_TYPE,
+                ocrEngineType = preferences[PreferencesKeys.OCR_ENGINE_TYPE] ?: AppPreferences.DEFAULT_OCR_ENGINE_TYPE,
+                inpainterType = preferences[PreferencesKeys.INPAINTER_TYPE] ?: AppPreferences.DEFAULT_INPAINTER_TYPE,
+                apiKey = preferences[PreferencesKeys.API_KEY],
+                apiBase = preferences[PreferencesKeys.API_BASE],
+                modelName = preferences[PreferencesKeys.MODEL_NAME],
+                targetLanguage = preferences[PreferencesKeys.TARGET_LANGUAGE] ?: AppPreferences.DEFAULT_TARGET_LANGUAGE,
             )
         }
     }
@@ -89,6 +93,30 @@ class PreferencesRepository(
         }
     }
 
+    suspend fun updateApiKey(apiKey: String) {
+        dataStore.edit { preferences ->
+            preferences[PreferencesKeys.API_KEY] = apiKey
+        }
+    }
+
+    suspend fun updateApiBase(apiBase: String) {
+        dataStore.edit { preferences ->
+            preferences[PreferencesKeys.API_BASE] = apiBase
+        }
+    }
+
+    suspend fun updateModelName(modelName: String) {
+        dataStore.edit { preferences ->
+            preferences[PreferencesKeys.MODEL_NAME] = modelName
+        }
+    }
+
+    suspend fun updateTargetLanguage(targetLanguage: String) {
+        dataStore.edit { preferences ->
+            preferences[PreferencesKeys.TARGET_LANGUAGE] = targetLanguage
+        }
+    }
+
     companion object PreferencesKeys {
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val COLOR_SCHEME = stringPreferencesKey("color_scheme")
@@ -100,5 +128,13 @@ class PreferencesRepository(
         val TEXT_DETECTOR = stringPreferencesKey("text_detector")
         val OCR_ENGINE = stringPreferencesKey("ocr_engine")
         val IMAGE_REPAIR = stringPreferencesKey("image_repair")
+        val TRANSLATOR_TYPE = stringPreferencesKey("translator_type")
+        val DETECTOR_TYPE = stringPreferencesKey("detector_type")
+        val OCR_ENGINE_TYPE = stringPreferencesKey("ocr_engine_type")
+        val INPAINTER_TYPE = stringPreferencesKey("inpainter_type")
+        val API_KEY = stringPreferencesKey("api_key")
+        val API_BASE = stringPreferencesKey("api_base")
+        val MODEL_NAME = stringPreferencesKey("model_name")
+        val TARGET_LANGUAGE = stringPreferencesKey("target_language")
     }
 }
