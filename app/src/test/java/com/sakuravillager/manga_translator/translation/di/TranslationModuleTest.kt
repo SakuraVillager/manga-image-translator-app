@@ -16,6 +16,7 @@ import com.sakuravillager.manga_translator.translation.stub.NoOpTextRecognizer
 import com.sakuravillager.manga_translator.translation.stub.NoOpTextRenderer
 import com.sakuravillager.manga_translator.translation.stub.NoOpTextlineMerger
 import com.sakuravillager.manga_translator.translation.stub.NoOpTranslator
+import com.sakuravillager.manga_translator.translation.translator.GptTranslator
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
@@ -71,9 +72,9 @@ class TranslationModuleTest : KoinTest {
     }
 
     @Test
-    fun `resolve Translator returns NoOpTranslator`() {
+    fun `resolve Translator returns GptTranslator by default`() {
         val translator = get<Translator>()
-        assertTrue(translator is NoOpTranslator)
+        assertTrue(translator is GptTranslator, "Expected GptTranslator, got ${translator::class.simpleName}")
     }
 
     @Test
