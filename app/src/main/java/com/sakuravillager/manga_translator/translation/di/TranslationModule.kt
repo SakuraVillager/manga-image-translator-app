@@ -23,7 +23,15 @@ import com.sakuravillager.manga_translator.translation.stub.NoOpTextDetector
 import com.sakuravillager.manga_translator.translation.stub.NoOpTextRecognizer
 import com.sakuravillager.manga_translator.translation.stub.NoOpTextRenderer
 import com.sakuravillager.manga_translator.translation.stub.NoOpTextlineMerger
+import com.sakuravillager.manga_translator.translation.data.config.TranslatorType
 import com.sakuravillager.manga_translator.translation.stub.NoOpTranslator
+import com.sakuravillager.manga_translator.translation.stub.OriginalTranslator
+import com.sakuravillager.manga_translator.translation.translator.GptTranslator
+import io.ktor.client.*
+import io.ktor.client.engine.cio.*
+import io.ktor.client.plugins.contentnegotiation.*
+import io.ktor.serialization.kotlinx.json.*
+import kotlinx.serialization.json.Json
 import org.koin.android.ext.koin.androidContext
 import org.koin.dsl.module
 
@@ -54,8 +62,30 @@ val translationModule = module {
     // TextlineMerger — always DefaultTextlineMerger (pure algorithm, no model dependency)
     single<TextlineMerger> { DefaultTextlineMerger() }
 
-    // Unimplemented modules (remain NoOp stubs)
-    single<Translator> { NoOpTranslator() }
+    // Translator — conditional injection based on TranslatorType
+    single<Translator> {
+        val config: TranslationConfig = get()
+        when (config.translator.translator) {
+            TranslatorType.GPT_COMPATIBLE -> GptTranslator(get())
+            TranslatorType.NONE -> NoOpTranslator()
+            TranslatorType.ORIGINAL -> OriginalTranslator()
+            // DEEPL, BAIDU, YOUDAO — keep NoOp stubs for now
+            else -> NoOpTranslator()
+        }
+    }
+
+    // Ktor HttpClient (for GPT translator and future API integrations)
+    single {
+        HttpClient(CIO) {
+            install(ContentNegotiation) {
+                json(Json {
+                    ignoreUnknownKeys = true
+                    isLenient = true
+                })
+            }
+        }
+    }
+
     single<MaskRefiner> { NoOpMaskRefiner() }
     single<Inpainter> { NoOpInpainter() }
     single<TextRenderer> { NoOpTextRenderer() }
