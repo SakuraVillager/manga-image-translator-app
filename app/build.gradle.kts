@@ -43,6 +43,11 @@ android {
     buildFeatures {
         compose = true
     }
+    testOptions {
+        unitTests {
+            isReturnDefaultValues = true
+        }
+    }
 }
 
 dependencies {
@@ -88,6 +93,9 @@ dependencies {
 
     // Coroutines Test
     testImplementation(libs.coroutines.test)
+
+    // Ktor Mock Engine (for unit tests)
+    testImplementation(libs.ktor.client.mock)
 
     // ONNX Runtime
     implementation(libs.onnxruntime.android)
