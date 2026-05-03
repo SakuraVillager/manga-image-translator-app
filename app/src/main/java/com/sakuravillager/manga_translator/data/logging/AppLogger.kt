@@ -1,10 +1,25 @@
 package com.sakuravillager.manga_translator.data.logging
 
+import android.content.Context
 import android.util.Log
+import java.io.BufferedReader
+import java.io.File
+import java.io.FileOutputStream
+import java.io.InputStreamReader
+import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 
 object AppLogger {
     private const val MAX_ENTRIES = 500
+    private const val LOG_DIR = "logs"
     private val buffer = ArrayDeque<LogEntry>()
+    private var logDir: File? = null
+
+    /** Initialize file logging. Call from Application.onCreate(). */
+    fun init(context: Context) {
+        logDir = File(context.filesDir, LOG_DIR)
+        logDir?.mkdirs()
+    }
 
     @Synchronized
     fun d(tag: String, message: String) {
@@ -40,14 +55,56 @@ object AppLogger {
             LogLevel.WARN -> Log.w(tag, message)
             LogLevel.ERROR -> Log.e(tag, message)
         }
+
+        // Persist to file (best-effort, never crash)
+        persist(entry)
+    }
+
+    private fun persist(entry: LogEntry) {
+        val dir = logDir ?: return
+        val datePart = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
+        val file = File(dir, "app.$datePart.log")
+        try {
+            FileOutputStream(file, true).use { fos ->
+                fos.write((entry.formatted() + "\n").toByteArray(Charsets.UTF_8))
+            }
+        } catch (_: Exception) {
+            // silent — logging must never crash the app
+        }
     }
 
     @Synchronized
     fun getLogs(): List<LogEntry> = buffer.toList()
 
-    @Synchronized
-    fun clear() = buffer.clear()
+    /** Read today's persisted log file. Returns the last N lines. */
+    fun getPersistedLogs(maxLines: Int = 2000): String {
+        val datePart = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
+        val dir = logDir ?: return ""
+        val file = File(dir, "app.$datePart.log")
+        if (!file.exists()) return ""
+        return try {
+            val lines = mutableListOf<String>()
+            BufferedReader(InputStreamReader(file.inputStream())).use { reader ->
+                var line = reader.readLine()
+                while (line != null) {
+                    lines.add(line)
+                    if (lines.size > maxLines) lines.removeFirst()
+                    line = reader.readLine()
+                }
+            }
+            lines.joinToString("\n")
+        } catch (_: Exception) { "" }
+    }
+
+    /** Get the log directory file handle. */
+    fun getLogDirectory(): File? = logDir
 
     @Synchronized
-    fun exportAsText(): String = buffer.joinToString("\n") { it.formatted() }
+    fun getExportText(): String = buffer.joinToString("\n") { it.formatted() }
+
+    @Synchronized
+    fun exportAsText(): String = getExportText()
+
+    @Synchronized
+    fun clear() = buffer.clear()
 }

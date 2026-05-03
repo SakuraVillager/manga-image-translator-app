@@ -6,15 +6,20 @@ import org.opencv.android.Utils
 import org.opencv.core.Mat
 
 /**
- * Attempts to initialize OpenCV via [OpenCVLoader.initDebug].
+ * Attempts to initialize OpenCV using [OpenCVLoader.initLocal] (preferred),
+ * falling back to the deprecated [OpenCVLoader.initDebug] if needed.
  *
  * @return `true` if OpenCV was successfully loaded, `false` otherwise.
  */
 fun ensureOpenCVLoaded(): Boolean {
     return try {
-        OpenCVLoader.initDebug()
+        OpenCVLoader.initLocal()
     } catch (e: Exception) {
-        false
+        try {
+            OpenCVLoader.initDebug()
+        } catch (e2: Exception) {
+            false
+        }
     }
 }
 
