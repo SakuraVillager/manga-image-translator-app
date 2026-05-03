@@ -1,0 +1,1 @@
+﻿PASS: 8 files import AppLogger: WorkspaceVM, AnimatedNavHost, MainActivity, SettingsAppearanceVM, HistoryVM, SelectPhotoScreen, PreferencesProvider, DatabaseProvider

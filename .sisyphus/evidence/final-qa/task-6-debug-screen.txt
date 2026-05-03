@@ -1,0 +1,27 @@
+=== TASK 6: SettingsDebugScreen ===
+
+Scenario 1: Debug screen shows log list from AppLogger
+  PASS - SettingsDebugViewModel reference at lines 44, 52
+    import at line 44: com.sakuravillager.manga_translator.ui.viewmodel.SettingsDebugViewModel
+    viewModel param at line 52: viewModel: SettingsDebugViewModel = viewModel()
+  PASS - LazyColumn + itemsIndexed at lines 16, 133, 137
+    import: androidx.compose.foundation.lazy.LazyColumn (line 15)
+    import: androidx.compose.foundation.lazy.itemsIndexed (line 16)
+    Usage: LazyColumn at line 133, itemsIndexed at line 137
+  ViewModel logs collected at line 54: val logs by viewModel.logs.collectAsState()
+
+Scenario 2: Copy button exists in top bar actions
+  PASS - ContentCopy icon at lines 19, 74-77
+    Import: androidx.compose.material.icons.filled.ContentCopy (line 19)
+    Usage: Icons.Default.ContentCopy inside TopAppBarWithBack actions slot (line 66-78)
+
+Scenario 3: Share and Clear buttons exist
+  PASS - clearLogs call at line 104 (inside OutlinedButton onClick)
+  PASS - shareLogs call at line 97 (context.startActivity(viewModel.shareLogs(context)))
+
+Edge Cases Verified:
+  - Empty state: "No logs recorded" placeholder at line 128
+  - Alternating backgrounds: index % 2 == 0 at line 152 (LogEntryItem)
+  - Copy success toast: "Logs copied to clipboard" at line 69
+  - Copy failure toast: "No logs to copy" at line 71
+  - Clear toast: "Logs cleared" at line 105

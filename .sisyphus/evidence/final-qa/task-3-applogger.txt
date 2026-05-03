@@ -1,0 +1,27 @@
+=== TASK 3: AppLogger + LogEntry ===
+
+Scenario 1: AppLogger singleton exists with ring buffer
+  PASS - object AppLogger found at AppLogger.kt:5
+  All 7 public methods:
+    - d(tag, message) at line 10
+    - i(tag, message) at line 15
+    - w(tag, message) at line 20
+    - e(tag, message, throwable) at line 25
+    - getLogs(): List<LogEntry> at line 46
+    - clear() at line 49
+    - exportAsText(): String at line 52
+  All methods @Synchronized for thread safety
+  Uses ArrayDeque ring buffer internally
+
+Scenario 2: LogEntry data class has formatted method
+  PASS - fun formatted() at LogEntry.kt:15
+  Data class fields:
+    - timestamp: Long (line 10)
+    - level: LogLevel (line 11)
+    - tag: String (line 12)
+    - message: String (line 13)
+  formatted() returns "[yyyy-MM-dd HH:mm:ss.SSS] [LEVEL] Tag: message"
+
+Scenario 3: Ring buffer has 500 capacity
+  PASS - MAX_ENTRIES = 500 constant at AppLogger.kt:6
+  Eviction logic at line 33: if (buffer.size > MAX_ENTRIES) buffer.removeFirst()

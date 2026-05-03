@@ -1,0 +1,2 @@
+﻿PASS: clickable remains on Column
+Verification: grep for .clickable shows at line 66 - on Column modifier

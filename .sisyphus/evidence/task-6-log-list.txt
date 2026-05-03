@@ -1,0 +1,1 @@
+﻿PASS: SettingsDebugScreen uses SettingsDebugViewModel + LazyColumn to display logs

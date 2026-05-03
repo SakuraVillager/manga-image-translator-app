@@ -1,0 +1,1 @@
+﻿PASS: file_paths.xml created with cache-path for logs/

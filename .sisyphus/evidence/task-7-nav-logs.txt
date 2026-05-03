@@ -1,0 +1,1 @@
+﻿PASS: AnimatedNavHost has 10 navigation DEBUG log calls across all routes

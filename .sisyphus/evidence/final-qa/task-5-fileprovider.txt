@@ -1,0 +1,19 @@
+=== TASK 5: FileProvider Configuration ===
+
+Scenario 1: file_paths.xml exists with cache-path for logs
+  PASS - file_paths.xml at app/src/main/res/xml/file_paths.xml
+  Content:
+    <?xml version="1.0" encoding="utf-8"?>
+    <paths>
+        <cache-path name="logs" path="logs/" />
+    </paths>
+  Correct path configuration: cache-path for "logs" directory
+
+Scenario 2: FileProvider declared in AndroidManifest
+  PASS - FileProvider found at AndroidManifest.xml:19-27
+    android:name="androidx.core.content.FileProvider" (line 20)
+    android:authorities="${applicationId}.fileprovider" (line 21)
+    android:exported="false" (line 22)
+    android:grantUriPermissions="true" (line 23)
+    Meta-data references @xml/file_paths (lines 24-26)
+  Provider placed BEFORE <activity> element (line 29)

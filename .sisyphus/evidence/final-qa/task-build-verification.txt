@@ -1,0 +1,10 @@
+=== BUILD VERIFICATION ===
+
+Command: $env:JAVA_HOME='D:\Program Files\Android Studio\jbr'; .\gradlew compileDebugKotlin --no-daemon
+Working Directory: E:\yhz\Projects\manga-image-translator-app
+
+Result: BUILD SUCCESSFUL in 17s
+15 actionable tasks: 15 up-to-date
+
+No compilation errors.
+No warnings (beyond Gradle deprecation notices unrelated to our changes).

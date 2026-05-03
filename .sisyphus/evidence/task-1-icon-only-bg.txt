@@ -1,0 +1,2 @@
+﻿PASS: background moved to Icon Box
+Verification: grep for Modifier.background(Color(0xFFDCE7DD)) in CapsuleNavBar.kt shows it's inside Box (line 75), not in Column

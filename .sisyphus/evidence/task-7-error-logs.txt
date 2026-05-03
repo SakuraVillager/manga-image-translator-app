@@ -1,0 +1,1 @@
+﻿PASS: HistoryViewModel has AppLogger.e for ERROR level logging in loadHistory catch block

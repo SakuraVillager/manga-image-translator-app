@@ -1,0 +1,1 @@
+﻿PASS: ViewModel uses StateFlow<List<LogEntry>> for logs property

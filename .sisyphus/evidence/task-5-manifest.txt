@@ -1,0 +1,1 @@
+﻿PASS: FileProvider declared in AndroidManifest with authority .fileprovider, exported=false, grantUriPermissions=true

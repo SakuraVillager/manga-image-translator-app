@@ -1,0 +1,1 @@
+﻿PASS: SettingsDebugViewModel created with all 4 methods (refreshLogs, clearLogs, copyLogsToClipboard, shareLogs)

@@ -1,0 +1,15 @@
+=== TASK 2: DatabaseProvider + MockDataSeeder ===
+
+Scenario 1: DatabaseProvider initialized on app start
+  PASS - DatabaseProvider.getDatabase(this) at MainActivity.kt:34
+  Called inside onCreate(), AFTER PreferencesProvider.initialize(this) at line 30
+  Line 30: PreferencesProvider.initialize(this)
+  Line 34: DatabaseProvider.getDatabase(this)
+
+Scenario 2: MockDataSeeder called on app start
+  PASS - MockDataSeeder.seedIfNeeded(applicationContext) at MainActivity.kt:40
+  Called inside lifecycleScope.launch { ... } block (lines 39-41)
+  Line 39: lifecycleScope.launch {
+  Line 40:   MockDataSeeder.seedIfNeeded(applicationContext)
+  Line 41: }
+  Coroutine scope correctly ensures non-blocking seeding

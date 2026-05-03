@@ -1,0 +1,1 @@
+﻿PASS: AppLogger singleton exists with all 7 methods: d, i, w, e, getLogs, clear, exportAsText

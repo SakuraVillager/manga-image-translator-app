@@ -1,0 +1,12 @@
+=== TASK 1: CapsuleNavBar Icon-Only Highlight ===
+
+Scenario 1: Active nav item shows icon-only background
+  PASS - Background(Color(0xFFDCE7DD)) found at CapsuleNavBar.kt:75
+  Location: Inside Box modifier (line 71-86 wraps Icon), NOT in Column (line 64-92)
+  Context: Box(Modifier.clip(...).then(if (isActive) Modifier.background(Color(0xFFDCE7DD)))...)
+  Column modifier only has .clickable and .padding - NO background
+
+Scenario 2: Clickable remains on Column for text tap navigation
+  PASS - .clickable found on Column modifier at CapsuleNavBar.kt:66
+  Line 66: Column(modifier = Modifier.clickable { onNavigate(item.route) }.padding(...))
+  Not on inner Box - clickable preserved for full tap area

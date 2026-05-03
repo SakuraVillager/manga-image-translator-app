@@ -1,0 +1,1 @@
+﻿PASS: LogEntry data class with timestamp, level, tag, message + formatted() method

@@ -1,0 +1,1 @@
+﻿PASS: MAX_ENTRIES = 500 in AppLogger.kt line 6

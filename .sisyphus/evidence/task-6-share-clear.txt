@@ -1,0 +1,1 @@
+﻿PASS: Share (startActivity) and Clear (clearLogs) buttons present

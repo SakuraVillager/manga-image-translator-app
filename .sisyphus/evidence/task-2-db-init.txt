@@ -1,0 +1,2 @@
+﻿PASS: DatabaseProvider.getDatabase(this) added to MainActivity.onCreate() at line 34
+After PreferencesProvider.initialize(this) at line 30
