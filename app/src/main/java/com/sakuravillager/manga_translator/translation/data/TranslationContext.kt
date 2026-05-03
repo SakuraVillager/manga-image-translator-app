@@ -1,0 +1,19 @@
+package com.sakuravillager.manga_translator.translation.data
+
+import android.graphics.Bitmap
+import com.sakuravillager.manga_translator.translation.data.config.TranslationConfig
+
+data class TranslationContext(
+    val inputBitmap: Bitmap,
+    val config: TranslationConfig,
+    var imgRgb: Bitmap? = null,
+    var textlines: MutableList<Quadrilateral> = mutableListOf(),
+    var rawMask: Bitmap? = null,
+    var refinedMask: Bitmap? = null,
+    var textRegions: MutableList<TextBlock> = mutableListOf(),
+    var imgInpainted: Bitmap? = null,
+    var imgRendered: Bitmap? = null,
+    var resultBitmap: Bitmap? = null,
+    var fromLanguage: String? = null,
+    var debugImages: MutableMap<String, Bitmap> = mutableMapOf(),
+)

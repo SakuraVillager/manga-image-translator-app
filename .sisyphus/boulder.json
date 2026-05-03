@@ -1,0 +1,23 @@
+{
+  "active_plan": "E:\\yhz\\Projects\\manga-image-translator-app\\.sisyphus\\plans\\plan2-onnx-detection-ocr.md",
+  "started_at": "2026-05-03T07:54:58.427Z",
+  "session_ids": [
+    "ses_2140596aeffe5sQLDvA9lpVQM6"
+  ],
+  "session_origins": {
+    "ses_2140596aeffe5sQLDvA9lpVQM6": "direct"
+  },
+  "plan_name": "plan2-onnx-detection-ocr",
+  "agent": "atlas",
+  "task_sessions": {
+    "todo:0": {
+      "task_key": "todo:0",
+      "task_label": "0",
+      "task_title": "Fix missing data models — Quadrilateral, TextBlock, DetectionResult, TranslationContext, TextDirection, TextAlignment",
+      "session_id": "ses_21328a14cffeTvn0duGkakH1an",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-05-03T08:27:11.807Z"
+    }
+  }
+}

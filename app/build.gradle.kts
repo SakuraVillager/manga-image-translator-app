@@ -17,6 +17,10 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        ndk {
+            abiFilters += "arm64-v8a"
+        }
     }
 
     buildTypes {
@@ -72,4 +76,21 @@ dependencies {
 
     // DataStore
     implementation(libs.datastore.preferences)
+
+    // Koin DI
+    implementation(libs.koin.core)
+    implementation(libs.koin.android)
+
+    // Koin Test
+    testImplementation(libs.koin.test)
+    testImplementation(libs.koin.test.junit4)
+
+    // Coroutines Test
+    testImplementation(libs.coroutines.test)
+
+    // ONNX Runtime
+    implementation(libs.onnxruntime.android)
+
+    // OpenCV
+    implementation(libs.opencv.android)
 }
