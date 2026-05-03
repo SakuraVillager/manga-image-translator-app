@@ -336,7 +336,7 @@ Wave 5 (验证)
 
 ## Final Verification Wave
 
-- [ ] T12. **插桩测试：端到端管线**
+- [x] T12. **插桩测试：端到端管线**
 
   **What to do**:
   - 在 `app/src/androidTest/` 中编写 `TranslationPipelineE2ETest.kt`
@@ -394,7 +394,7 @@ Wave 5 (验证)
   - Message: `test(e2e): add instrumented end-to-end pipeline test with real modules`
   - Files: `TranslationPipelineE2ETest.kt`
 
-- [ ] T13. **构建验证 + Lint**
+- [x] T13. **构建验证 + Lint**
 
   **What to do**:
   - 运行 `./gradlew :app:assembleDebug` 确认所有新文件编译通过
