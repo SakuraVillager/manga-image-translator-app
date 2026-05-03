@@ -744,7 +744,7 @@ Wave 5 (验证)
 
 - [x] T4. **实现 OpenCVMaskRefiner（遮罩优化）**
 - [x] T5. **实现 SimpleFillInpainter（图像修复）**
-- [ ] T6. **实现 HorizontalTextRenderer（横排文字渲染）**
+- [x] T6. **实现 HorizontalTextRenderer（横排文字渲染）**
 - [x] T7. **添加 Noto Sans CJK 字体资产**
 
   **What to do**:
