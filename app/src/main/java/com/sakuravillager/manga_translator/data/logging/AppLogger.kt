@@ -4,8 +4,8 @@ import android.content.Context
 import android.util.Log
 import java.io.BufferedReader
 import java.io.File
+import java.io.FileOutputStream
 import java.io.InputStreamReader
-import java.io.RandomAccessFile
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 
@@ -61,19 +61,23 @@ object AppLogger {
     }
 
     private fun persist(entry: LogEntry) {
-        val dir = logDir ?: return
+        val dir = logDir
+        if (dir == null) {
+            Log.e("AppLogger", "logDir is null — AppLogger.init() was never called")
+            return
+        }
         val datePart = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
         val file = File(dir, "app.$datePart.log")
         try {
-            // Use RandomAccessFile in "rwd" mode for crash-safe writes.
-            // "rwd" = synchronous writes: each write() is committed to disk immediately.
-            // Without this, OS-buffered writes can be lost if the process crashes.
-            RandomAccessFile(file, "rwd").use { raf ->
-                raf.seek(file.length())  // append
-                raf.write((entry.formatted() + "\n").toByteArray(Charsets.UTF_8))
+            val bytes = (entry.formatted() + "\n").toByteArray(Charsets.UTF_8)
+            FileOutputStream(file, true).use { fos ->
+                fos.write(bytes)
+                @Suppress("DEPRECATION")
+                fos.fd.sync()  // fsync — force to physical storage; survives crashes
             }
-        } catch (_: Exception) {
-            // silent — logging must never crash the app
+        } catch (e: Exception) {
+            // Use android.util.Log directly (not our own log) to avoid recursion
+            Log.e("AppLogger", "Failed to persist log: ${e.message}", e)
         }
     }
 
