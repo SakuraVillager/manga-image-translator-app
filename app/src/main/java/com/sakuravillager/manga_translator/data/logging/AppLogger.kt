@@ -4,8 +4,8 @@ import android.content.Context
 import android.util.Log
 import java.io.BufferedReader
 import java.io.File
-import java.io.FileOutputStream
 import java.io.InputStreamReader
+import java.io.RandomAccessFile
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 
@@ -65,8 +65,12 @@ object AppLogger {
         val datePart = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
         val file = File(dir, "app.$datePart.log")
         try {
-            FileOutputStream(file, true).use { fos ->
-                fos.write((entry.formatted() + "\n").toByteArray(Charsets.UTF_8))
+            // Use RandomAccessFile in "rwd" mode for crash-safe writes.
+            // "rwd" = synchronous writes: each write() is committed to disk immediately.
+            // Without this, OS-buffered writes can be lost if the process crashes.
+            RandomAccessFile(file, "rwd").use { raf ->
+                raf.seek(file.length())  // append
+                raf.write((entry.formatted() + "\n").toByteArray(Charsets.UTF_8))
             }
         } catch (_: Exception) {
             // silent — logging must never crash the app
@@ -102,8 +106,20 @@ object AppLogger {
     @Synchronized
     fun getExportText(): String = buffer.joinToString("\n") { it.formatted() }
 
+    /**
+     * Full export: in-memory buffer + today's persisted file.
+     * Survives crashes — file content is retained across process restarts.
+     */
     @Synchronized
-    fun exportAsText(): String = getExportText()
+    fun exportAsText(): String {
+        val persisted = getPersistedLogs()
+        val memory = buffer.joinToString("\n") { it.formatted() }
+        return when {
+            persisted.isEmpty() -> memory
+            memory.isEmpty() -> persisted
+            else -> "$persisted\n$memory"
+        }
+    }
 
     @Synchronized
     fun clear() = buffer.clear()
