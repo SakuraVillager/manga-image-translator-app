@@ -72,11 +72,11 @@ object AppLogger {
             val bytes = (entry.formatted() + "\n").toByteArray(Charsets.UTF_8)
             FileOutputStream(file, true).use { fos ->
                 fos.write(bytes)
+                fos.flush()                       // flush Java buffer → OS
                 @Suppress("DEPRECATION")
-                fos.fd.sync()  // fsync — force to physical storage; survives crashes
+                fos.fd.sync()                     // fsync → physical storage
             }
         } catch (e: Exception) {
-            // Use android.util.Log directly (not our own log) to avoid recursion
             Log.e("AppLogger", "Failed to persist log: ${e.message}", e)
         }
     }
@@ -84,20 +84,28 @@ object AppLogger {
     @Synchronized
     fun getLogs(): List<LogEntry> = buffer.toList()
 
-    /** Read today's persisted log file. Returns the last N lines. */
-    fun getPersistedLogs(maxLines: Int = 2000): String {
-        val datePart = LocalDate.now().format(DateTimeFormatter.ISO_LOCAL_DATE)
+    /**
+     * Read ALL persisted log files in the directory, newest first.
+     * Unlike the old getPersistedLogs() which only reads today's file,
+     * this reads every app.*.log file → handles crashes that span multiple days.
+     */
+    fun getAllPersistedLogs(maxLines: Int = 5000): String {
         val dir = logDir ?: return ""
-        val file = File(dir, "app.$datePart.log")
-        if (!file.exists()) return ""
+        val logFiles = dir.listFiles { file -> file.name.startsWith("app.") && file.name.endsWith(".log") }
+            ?: emptyArray()
+        if (logFiles.isEmpty()) return ""
+        // Newest first
+        val sorted = logFiles.sortedByDescending { it.name }
         return try {
             val lines = mutableListOf<String>()
-            BufferedReader(InputStreamReader(file.inputStream())).use { reader ->
-                var line = reader.readLine()
-                while (line != null) {
-                    lines.add(line)
-                    if (lines.size > maxLines) lines.removeFirst()
-                    line = reader.readLine()
+            for (file in sorted) {
+                BufferedReader(InputStreamReader(file.inputStream())).use { reader ->
+                    var line = reader.readLine()
+                    while (line != null) {
+                        lines.add(line)
+                        if (lines.size > maxLines) lines.removeFirst()
+                        line = reader.readLine()
+                    }
                 }
             }
             lines.joinToString("\n")
@@ -111,17 +119,18 @@ object AppLogger {
     fun getExportText(): String = buffer.joinToString("\n") { it.formatted() }
 
     /**
-     * Full export: in-memory buffer + today's persisted file.
-     * Survives crashes — file content is retained across process restarts.
+     * Full export: all persisted log files + current in-memory buffer.
+     * Reads EVERY app.*.log file in the directory — survives crashes
+     * and day transitions where old getPersistedLogs() would lose data.
      */
     @Synchronized
     fun exportAsText(): String {
-        val persisted = getPersistedLogs()
+        val fileContent = getAllPersistedLogs()
         val memory = buffer.joinToString("\n") { it.formatted() }
         return when {
-            persisted.isEmpty() -> memory
-            memory.isEmpty() -> persisted
-            else -> "$persisted\n$memory"
+            fileContent.isEmpty() -> memory
+            memory.isEmpty() -> fileContent
+            else -> "$fileContent\n$memory"
         }
     }
 
