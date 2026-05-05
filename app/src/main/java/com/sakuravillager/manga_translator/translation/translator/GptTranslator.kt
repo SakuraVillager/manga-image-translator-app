@@ -10,6 +10,8 @@ import io.ktor.client.request.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import kotlinx.serialization.json.Json
+import io.ktor.client.plugins.ClientRequestException
+import kotlinx.coroutines.delay
 
 class GptTranslator(private val httpClient: HttpClient = HttpClient {
     install(ContentNegotiation) {
@@ -61,11 +63,13 @@ class GptTranslator(private val httpClient: HttpClient = HttpClient {
                 ),
             )
 
-            val response: ChatCompletionResponse = httpClient.post(endpoint) {
-                header(HttpHeaders.Authorization, "Bearer ${config.apiKey ?: ""}")
-                contentType(ContentType.Application.Json)
-                setBody(request)
-            }.body()
+            val response: ChatCompletionResponse = retryWithBackoff {
+                httpClient.post(endpoint) {
+                    header(HttpHeaders.Authorization, "Bearer ${config.apiKey ?: ""}")
+                    contentType(ContentType.Application.Json)
+                    setBody(request)
+                }.body()
+            }
 
             val content = response.choices.firstOrNull()?.message?.content ?: return texts
 
@@ -90,7 +94,37 @@ class GptTranslator(private val httpClient: HttpClient = HttpClient {
 
     override fun supportsLanguagePair(from: String, to: String): Boolean = true
 
+    private suspend fun <T> retryWithBackoff(
+        maxRetries: Int = 3,
+        baseDelayMs: Long = 1000L,
+        maxDelayMs: Long = 30_000L,
+        block: suspend () -> T,
+    ): T {
+        var lastException: Exception? = null
+        for (attempt in 0..maxRetries) {
+            try {
+                return block()
+            } catch (e: Exception) {
+                lastException = e
+                if (attempt < maxRetries) {
+                    val delayMs = when {
+                        e is ClientRequestException && e.response.status.value == 429 -> {
+                            val retryAfter = e.response.headers[HttpHeaders.RetryAfter]
+                            retryAfter?.toLongOrNull()?.times(1000L)
+                                ?: minOf(baseDelayMs * (1L shl attempt), maxDelayMs)
+                        }
+                        else -> minOf(baseDelayMs * (1L shl attempt), maxDelayMs)
+                    }
+                    Log.w(TAG, "Attempt ${attempt + 1}/${maxRetries + 1} failed: ${e.message}. Retrying in ${delayMs}ms...")
+                    delay(delayMs)
+                }
+            }
+        }
+        throw lastException!!
+    }
+
     companion object {
+        private const val TAG = "GptTranslator"
         val VALID_LANGUAGES = mapOf(
             "CHS" to "Simplified Chinese",
             "CHT" to "Traditional Chinese",

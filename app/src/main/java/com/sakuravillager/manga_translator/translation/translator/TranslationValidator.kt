@@ -47,6 +47,9 @@ object TranslationValidator {
      * Returns true if the translation is valid, false if it should be discarded.
      */
     fun validate(original: String, translation: String, targetLang: String): Boolean {
+        // Skip language ratio check when target is auto
+        val effectiveTargetLang = if (targetLang.lowercase() == "auto") "skip" else targetLang
+
         // Empty translation is invalid
         if (translation.isBlank()) {
             Log.w(TAG, "Validation failed: empty translation")
@@ -65,8 +68,15 @@ object TranslationValidator {
             return false
         }
 
+        // Short text: if translation changed, skip language ratio (likely proper noun/etc)
+        val isShortText = original.length < 5
+        if (isShortText && translation != original) {
+            Log.d(TAG, "Short text detected, skipping language ratio check")
+            return true
+        }
+
         // Target language ratio check
-        if (!isTargetLanguageRatio(translation, targetLang)) {
+        if (!isTargetLanguageRatio(translation, effectiveTargetLang)) {
             Log.w(TAG, "Validation failed: insufficient target language content")
             return false
         }

@@ -140,8 +140,15 @@ class TranslationPipeline(
     }
 
     private fun filterInvalidTranslations(regions: List<TextBlock>, targetLanguage: String): List<TextBlock> {
-        return regions.filter { region ->
-            TranslationValidator.validate(region.text, region.translation, targetLanguage)
+        return regions.map { region ->
+            val isValid = TranslationValidator.validate(region.text, region.translation, targetLanguage)
+            if (isValid) {
+                region
+            } else {
+                Log.w("TranslationPipeline",
+                    "Translation validation failed for '${region.text}', falling back to original")
+                region.copy(translation = region.text)
+            }
         }
     }
 }

@@ -30,10 +30,13 @@ import com.sakuravillager.manga_translator.translation.data.config.TranslatorTyp
 import com.sakuravillager.manga_translator.translation.stub.NoOpTranslator
 import com.sakuravillager.manga_translator.translation.stub.OriginalTranslator
 import com.sakuravillager.manga_translator.translation.translator.GptTranslator
+import com.sakuravillager.manga_translator.data.preferences.PreferencesProvider
+import com.sakuravillager.manga_translator.translation.config.TranslationConfigMapper
 import io.ktor.client.*
 import io.ktor.client.engine.cio.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.serialization.kotlinx.json.*
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
 import org.koin.android.ext.koin.androidContext
 import org.koin.dsl.module
@@ -42,7 +45,6 @@ val translationModule = module {
     // Infrastructure singletons
     single { OnnxSessionManager }
     single { ModelDownloadManager(androidContext()) }
-    single { OcrDictionary }
 
     // Factory pattern for TextDetector — CTD or NoOp fallback
     single<TextDetector> {
@@ -53,11 +55,11 @@ val translationModule = module {
         }
     }
 
-    // Factory pattern for TextRecognizer — Model48px or NoOp fallback
+    // TextRecognizer — CTC model loaded from assets, no ONNX session needed
     single<TextRecognizer> {
         val config: TranslationConfig = get()
         when (config.ocr.ocrEngine) {
-            OcrEngineType.MODEL_48PX -> Model48pxTextRecognizer(get(), get(), androidContext())
+            OcrEngineType.MODEL_48PX -> Model48pxTextRecognizer(androidContext())
             else -> NoOpTextRecognizer()
         }
     }
@@ -92,13 +94,18 @@ val translationModule = module {
     // Real implementations replacing NoOp stubs
     factory<MaskRefiner> { OpenCVMaskRefiner() }
     factory<Inpainter> { SimpleFillInpainter() }
-    factory<TextRenderer> { HorizontalTextRenderer(androidContext()) }
+    factory<TextRenderer> { HorizontalTextRenderer(androidContext(), get()) }
 
-    // Default config
-    single { TranslationConfig() }
+    // TranslationConfig — factory reading from DataStore via PreferencesProvider
+    factory {
+        val prefs = kotlinx.coroutines.runBlocking {
+            PreferencesProvider.repository.getPreferences().first()
+        }
+        TranslationConfigMapper.map(prefs)
+    }
 
-    // Pipeline orchestrator
-    single {
+    // Pipeline orchestrator — factory so it re-resolves config on each injection
+    factory {
         TranslationPipeline(
             detector = get<TextDetector>(),
             recognizer = get<TextRecognizer>(),
