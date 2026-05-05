@@ -121,7 +121,8 @@ class AotInpainter(
 
         try {
             // ---- 4. Build NCHW float32 tensor [1, 4, H, W] --------------------
-            // Channel 0: MASK (0.0 or 1.0, threshold at 127)
+            // Channel 0: MASK (-1.0 or 1.0, threshold at 127)
+            //   Python source: mask/127.5-1.0 → [-1,1]; mask>0 → 1.0; bg stays -1.0
             // Channel 1: R (normalized to [-1, 1])
             // Channel 2: G (normalized to [-1, 1])
             // Channel 3: B (normalized to [-1, 1])
@@ -137,8 +138,8 @@ class AotInpainter(
                 val px = pixels[i]
                 val mx = maskPixels[i]
 
-                // MASK channel: 0.0 or 1.0 (threshold at 127, using any RGB channel)
-                floatArray[i] = if (((mx shr 16) and 0xFF) > 127) 1.0f else 0.0f
+                // MASK channel: 1.0 (fg) / -1.0 (bg), threshold at 127
+                floatArray[i] = if (((mx shr 16) and 0xFF) > 127) 1.0f else -1.0f
 
                 // RGB normalized to [-1, 1]: (value / 127.5) - 1.0
                 floatArray[1 * area + i] = (((px shr 16) and 0xFF) - 127.5f) / 127.5f
