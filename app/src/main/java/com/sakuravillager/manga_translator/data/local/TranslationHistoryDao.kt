@@ -20,4 +20,7 @@ interface TranslationHistoryDao {
 
     @Delete
     suspend fun delete(entity: TranslationHistoryEntity)
+
+    @Query("DELETE FROM translation_history WHERE imagePath LIKE '/mock/%'")
+    suspend fun deleteAllMockData()
 }

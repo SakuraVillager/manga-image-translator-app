@@ -10,12 +10,14 @@ import androidx.compose.material3.Surface
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.lifecycle.lifecycleScope
 import com.sakuravillager.manga_translator.data.local.DatabaseProvider
 import com.sakuravillager.manga_translator.data.logging.AppLogger
 import com.sakuravillager.manga_translator.data.preferences.PreferencesProvider
 import com.sakuravillager.manga_translator.data.preferences.PreferencesRepository
 import com.sakuravillager.manga_translator.translation.di.KoinInitializer
 import com.sakuravillager.manga_translator.ui.theme.MangaTranslatorTheme
+import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
 
@@ -30,6 +32,11 @@ class MainActivity : ComponentActivity() {
 
         // Initialize DatabaseProvider (required before any ViewModel accesses DAO)
         DatabaseProvider.getDatabase(this)
+
+        // Remove old mock data from the previous demo version
+        lifecycleScope.launch {
+            DatabaseProvider.dao.deleteAllMockData()
+        }
 
         // Initialize Koin DI
         KoinInitializer.start(this)
