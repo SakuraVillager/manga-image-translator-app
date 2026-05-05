@@ -61,8 +61,8 @@ object ModelRegistry {
     val AOT_INPAINTING_MODEL = ModelInfo(
         name = "aot_inpainting",
         url = "https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/aot_inpainting.onnx",
-        sha256 = "8d9af65348c17b7749c32c4fad62a4dc6b3fe267bf1ad64fb4f41062a49da848",
-        sizeBytes = 1_295_885L,
+        sha256 = "a3fc6e855133cb65fd56eb5f500f2f5facafda90d85c652332361efee7b2382b",
+        sizeBytes = 23_997_372L,
     )
 
     val allModels: List<ModelInfo> = listOf(CTD_MODEL, OCR_48PX_MODEL, ALPHABET_FILE, CJK_FONT, AOT_INPAINTING_MODEL)
