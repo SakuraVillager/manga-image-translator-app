@@ -1,5 +1,6 @@
 package com.sakuravillager.manga_translator.ui.viewmodel
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sakuravillager.manga_translator.data.local.TranslationHistoryDao
@@ -8,10 +9,12 @@ import com.sakuravillager.manga_translator.data.model.TranslationHistory
 import com.sakuravillager.manga_translator.data.logging.AppLogger
 import com.sakuravillager.manga_translator.data.model.TranslationStatus
 import com.sakuravillager.manga_translator.data.model.ViewState
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.io.File
 
 class HistoryViewModel(
     private val dao: TranslationHistoryDao = com.sakuravillager.manga_translator.data.local.DatabaseProvider.dao
@@ -48,6 +51,34 @@ class HistoryViewModel(
                 }
             } catch (e: Exception) {
                 AppLogger.e("History", "Failed to load history: ${e.message}", e)
+            }
+        }
+    }
+
+    fun deleteHistory(id: Long) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                // 1. Find the entity by collecting from DB (single shot)
+                val entity = dao.getById(id).let { flow ->
+                    var result: TranslationHistoryEntity? = null
+                    flow.collect { result = it; return@collect }
+                    result
+                } ?: return@launch
+
+                // 2. Delete associated image files
+                listOfNotNull(
+                    entity.imagePath,
+                    entity.resultImagePath,
+                    entity.coverImageUri,
+                ).forEach { path ->
+                    try { File(path).delete() } catch (_: Exception) {}
+                }
+
+                // 3. Delete from Room database
+                dao.delete(entity)
+                AppLogger.i("History", "Deleted history: id=$id")
+            } catch (e: Exception) {
+                AppLogger.e("History", "Failed to delete history: ${e.message}", e)
             }
         }
     }
