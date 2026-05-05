@@ -49,10 +49,11 @@ object ModelRegistry {
     /**
      * AOT-GAN inpainting model (ONNX).
      *
-     * Exported from the PyTorch checkpoint using [export_onnx.py].
-     * The ONNX file must be uploaded to the GitHub release and placed at the
-     * path below. If the file is not available at the URL, place the ONNX file
-     * manually at `{filesDir}/models/aot_inpainting` (see ModelDownloadManager).
+     * Bundled in app/src/main/assets/models/aot_inpainting.onnx (~1.2 MB).
+     * Falls back to GitHub Release download if the asset is missing.
+     *
+     * Exported from the PyTorch checkpoint by export_onnx.py:
+     *   https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/inpainting.ckpt
      *
      * Architecture: AOTGenerator(4, 3) — 4 input channels (mask+R/G/B),
      * 3 output channels (R/G/B). Input normalized to [-1, 1].

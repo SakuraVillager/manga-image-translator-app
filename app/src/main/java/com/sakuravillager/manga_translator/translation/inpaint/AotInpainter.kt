@@ -12,6 +12,7 @@ import com.sakuravillager.manga_translator.translation.model.ModelRegistry
 import com.sakuravillager.manga_translator.translation.onnx.OnnxSessionManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.IOException
 import java.nio.FloatBuffer
 
 /**
@@ -25,13 +26,13 @@ import java.nio.FloatBuffer
  * Normalization: /127.5 - 1.0 → range [-1, 1] (no FFT/LamaFourier normalization).
  * MASK concat order: cat([mask, img], dim=1) — mask channel first.
  *
- * Model file: aot_inpainting.onnx (to be exported from the PyTorch checkpoint).
- * Original checkpoint: https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/inpainting.ckpt
+ * Model file: aot_inpainting.onnx — bundled in assets/models/.
+ * Fallback download URL: ModelRegistry.AOT_INPAINTING_MODEL (future GitHub Release).
  */
 class AotInpainter(
     private val modelDownloadManager: ModelDownloadManager,
     private val sessionManager: OnnxSessionManager,
-    @Suppress("unused") private val context: Context,
+    private val context: Context,
 ) : Inpainter {
 
     override val name: String = "AotInpainter"
@@ -43,13 +44,24 @@ class AotInpainter(
 
     companion object {
         private const val TAG = "AotInpainter"
+        private const val ASSET_PATH = "models/aot_inpainting.onnx"
     }
 
     override suspend fun prepare() {
         Log.d(TAG, "Preparing AotInpainter...")
-        val modelFile = modelDownloadManager.ensureModel(ModelRegistry.AOT_INPAINTING_MODEL)
-        val modelBytes = modelFile.readBytes()
-        Log.d(TAG, "Model loaded (${modelBytes.size} bytes), creating ONNX session...")
+        // Priority 1: Load from bundled assets
+        val modelBytes = try {
+            context.assets.open(ASSET_PATH).use { it.readBytes() }.also {
+                Log.d(TAG, "Loaded from assets (${it.size} bytes)")
+            }
+        } catch (e: IOException) {
+            Log.w(TAG, "Asset not found, trying download: ${e.message}")
+            // Priority 2: Download from remote URL
+            modelDownloadManager.ensureModel(ModelRegistry.AOT_INPAINTING_MODEL).readBytes().also {
+                Log.d(TAG, "Downloaded model (${it.size} bytes)")
+            }
+        }
+        Log.d(TAG, "Creating ONNX session...")
         session = sessionManager.createSession(modelBytes)
         _isReady = true
         Log.d(TAG, "AotInpainter ready")
