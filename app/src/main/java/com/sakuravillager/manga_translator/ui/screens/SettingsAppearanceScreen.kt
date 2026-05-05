@@ -92,10 +92,10 @@ fun SettingsAppearanceScreen(
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 ThemePreviewCard(
-                    name = "Default",
-                    primaryColor = TaupePrimary,
-                    isSelected = preferences.colorScheme == "default",
-                    onClick = { scope.launch { repository.updateColorScheme("default") } },
+                    name = "System",
+                    primaryColor = SuccessGreen,
+                    isSelected = preferences.colorScheme == "system",
+                    onClick = { scope.launch { repository.updateColorScheme("system") } },
                     modifier = Modifier.weight(1f)
                 )
 

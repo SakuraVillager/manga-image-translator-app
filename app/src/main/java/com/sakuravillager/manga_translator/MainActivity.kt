@@ -54,7 +54,7 @@ class MainActivity : ComponentActivity() {
 
             MangaTranslatorTheme(
                 darkTheme = useDarkTheme,
-                colorSchemeName = preferences?.colorScheme ?: "default",
+                colorSchemeName = preferences?.colorScheme ?: "system",
                 pureBlackDarkMode = preferences?.pureBlackDarkMode ?: false
             ) {
                 Surface(

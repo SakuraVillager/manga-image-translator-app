@@ -11,6 +11,7 @@ import android.util.Log
 import com.sakuravillager.manga_translator.translation.api.TextDetector
 import com.sakuravillager.manga_translator.translation.data.DetectionResult
 import com.sakuravillager.manga_translator.translation.data.Quadrilateral
+import com.sakuravillager.manga_translator.translation.data.TextDirection
 import com.sakuravillager.manga_translator.translation.data.config.DetectorConfig
 import com.sakuravillager.manga_translator.translation.model.ModelDownloadManager
 import com.sakuravillager.manga_translator.translation.model.ModelRegistry
@@ -173,10 +174,21 @@ class CtdTextDetector(
                 val scaledPoints = quad.points.map { p ->
                     PointF(p.x * factorX, p.y * factorY)
                 }
+                val sortedPoints = Quadrilateral.sortPoints(scaledPoints)
+                val minX = sortedPoints.minOf { it.x }
+                val maxX = sortedPoints.maxOf { it.x }
+                val minY = sortedPoints.minOf { it.y }
+                val maxY = sortedPoints.maxOf { it.y }
+                val direction = if ((maxX - minX) >= (maxY - minY)) {
+                    TextDirection.HORIZONTAL
+                } else {
+                    TextDirection.VERTICAL
+                }
                 Quadrilateral(
-                    points = Quadrilateral.sortPoints(scaledPoints),
+                    points = sortedPoints,
                     text = "",
                     probability = quad.probability,
+                    direction = direction,
                 )
             }
 

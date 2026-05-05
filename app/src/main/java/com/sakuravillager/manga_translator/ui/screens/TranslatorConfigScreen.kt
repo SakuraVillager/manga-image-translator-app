@@ -1,6 +1,7 @@
 package com.sakuravillager.manga_translator.ui.screens
 
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -20,7 +21,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -63,7 +63,7 @@ fun TranslatorConfigScreen(
                 .verticalScroll(rememberScrollState())
         ) {
             Text(
-                text = "Choose a platform to configure it. Use the row action to enable it for translation.",
+                text = "Tap to select. Long press to configure.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(bottom = 16.dp)
@@ -75,12 +75,12 @@ fun TranslatorConfigScreen(
                     title = platform.title,
                     subtitle = platform.description,
                     isSelected = preferences.translatorType == platform.id,
-                    onClick = { onPlatformClick(platform.id) },
-                    onEnableClick = {
+                    onClick = {
                         scope.launch {
                             repository.updateTranslatorType(platform.id)
                         }
-                    }
+                    },
+                    onLongClick = { onPlatformClick(platform.id) }
                 )
 
                 if (index != translatorPlatformEntries.lastIndex) {
@@ -93,6 +93,7 @@ fun TranslatorConfigScreen(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun TranslatorListItem(
     icon: ImageVector,
@@ -100,26 +101,31 @@ private fun TranslatorListItem(
     subtitle: String,
     isSelected: Boolean,
     onClick: () -> Unit,
-    onEnableClick: () -> Unit,
+    onLongClick: () -> Unit,
 ) {
+    val primaryColor = MaterialTheme.colorScheme.primary
+    
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick
+            ),
         shape = RoundedCornerShape(24.dp),
-        color = if (isSelected) SuccessGreen.copy(alpha = 0.1f) else Color.Transparent
+        color = if (isSelected) primaryColor.copy(alpha = 0.12f) else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .padding(horizontal = 16.dp, vertical = 14.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
                 imageVector = icon,
                 contentDescription = null,
-                modifier = Modifier.size(26.dp),
-                tint = SuccessGreen
+                modifier = Modifier.size(28.dp),
+                tint = if (isSelected) primaryColor else MaterialTheme.colorScheme.onSurfaceVariant
             )
             Column(
                 modifier = Modifier
@@ -128,14 +134,14 @@ private fun TranslatorListItem(
             ) {
                 Text(
                     text = title,
-                    fontSize = 17.sp,
-                    fontWeight = FontWeight.Normal,
-                    color = Color(0xFF1A1C19)
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = if (isSelected) primaryColor else MaterialTheme.colorScheme.onSurface
                 )
                 Text(
                     text = subtitle,
-                    fontSize = 13.5.sp,
-                    color = if (isSelected) SuccessGreen else Color(0xFF424944),
+                    fontSize = 13.sp,
+                    color = if (isSelected) primaryColor.copy(alpha = 0.7f) else MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 2.dp)
                 )
             }
@@ -144,13 +150,9 @@ private fun TranslatorListItem(
                 Icon(
                     imageVector = Icons.Default.Check,
                     contentDescription = "Selected",
-                    tint = SuccessGreen,
+                    tint = primaryColor,
                     modifier = Modifier.size(24.dp)
                 )
-            } else {
-                TextButton(onClick = onEnableClick) {
-                    Text("Enable")
-                }
             }
         }
     }
@@ -167,25 +169,25 @@ private val translatorPlatformEntries = listOf(
     TranslatorPlatformEntry(
         id = "gpt_compatible",
         title = "GPT-4 Vision",
-        description = "OpenAI-compatible endpoint, key, base URL, model",
+        description = "OpenAI-compatible endpoint",
         icon = Icons.Default.Translate,
     ),
     TranslatorPlatformEntry(
         id = "deepl",
         title = "DeepL",
-        description = "DeepL auth key and endpoint settings",
+        description = "DeepL API",
         icon = Icons.Default.Translate,
     ),
     TranslatorPlatformEntry(
         id = "baidu",
         title = "Baidu",
-        description = "Baidu app id and secret key",
+        description = "Baidu Translate",
         icon = Icons.Default.Person,
     ),
     TranslatorPlatformEntry(
         id = "youdao",
         title = "Youdao",
-        description = "Youdao app key and app secret",
+        description = "Youdao Translate",
         icon = Icons.Default.Person,
     ),
 )

@@ -3,6 +3,7 @@ package com.sakuravillager.manga_translator.translation.data
 import android.graphics.Bitmap
 import android.graphics.PointF
 import android.graphics.RectF
+import com.sakuravillager.manga_translator.translation.util.polygonDistance
 import kotlin.math.abs
 import kotlin.math.acos
 import kotlin.math.atan2
@@ -49,6 +50,8 @@ data class Quadrilateral(
         return RectF(minX, minY, maxX, maxY)
     }
 
+    val aabb: RectF get() = boundingBox
+
     val area: Float get() {
         if (points.size < 4) return 0f
         var a = 0f
@@ -93,6 +96,28 @@ data class Quadrilateral(
             sqrt(dx1 * dx1 + dy1 * dy1),
             sqrt(dx2 * dx2 + dy2 * dy2)
         )
+    }
+
+    val isApproximateAxisAligned: Boolean get() {
+        val s = structure
+        if (s.size < 4) return false
+
+        val topToBottom = PointF(s[1].x - s[0].x, s[1].y - s[0].y)
+        val rightToLeft = PointF(s[2].x - s[3].x, s[2].y - s[3].y)
+
+        fun isNearAxis(vec: PointF): Boolean {
+            val len = sqrt(vec.x * vec.x + vec.y * vec.y)
+            if (len == 0f) return false
+            val unitX = vec.x / len
+            val unitY = vec.y / len
+            return abs(unitX) < 0.05f || abs(unitY) < 0.05f
+        }
+
+        return isNearAxis(topToBottom) || isNearAxis(rightToLeft)
+    }
+
+    fun polyDistance(other: Quadrilateral): Float {
+        return polygonDistance(points, other.points)
     }
 
     fun distance(other: Quadrilateral, rho: Float = 0.5f): Float {

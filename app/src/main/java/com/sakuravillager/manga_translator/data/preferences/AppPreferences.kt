@@ -26,7 +26,7 @@ data class AppPreferences(
 ) {
     companion object {
         const val DEFAULT_THEME_MODE = "system"
-        const val DEFAULT_COLOR_SCHEME = "default"
+        const val DEFAULT_COLOR_SCHEME = "system"
         const val DEFAULT_PURE_BLACK_DARK_MODE = false
         const val DEFAULT_APP_LANGUAGE = "en"
         const val DEFAULT_TABLET_INTERFACE = "auto"

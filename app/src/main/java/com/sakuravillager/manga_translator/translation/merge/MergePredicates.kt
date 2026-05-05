@@ -2,6 +2,7 @@ package com.sakuravillager.manga_translator.translation.merge
 
 import com.sakuravillager.manga_translator.translation.data.Quadrilateral
 import com.sakuravillager.manga_translator.translation.data.TextDirection
+import kotlin.math.PI
 import kotlin.math.abs
 
 /**
@@ -10,10 +11,10 @@ import kotlin.math.abs
  */
 private const val DEFAULT_RATIO = 1.9f
 private const val DEFAULT_DISCARD_CONNECTION_GAP = 2.0f
-private const val DEFAULT_CHAR_GAP_TOLERANCE = 1.0f
-private const val DEFAULT_CHAR_GAP_TOL2 = 3.0f
-private const val DEFAULT_FONT_SIZE_RATIO_TOL = 2.0f
-private const val DEFAULT_ASPECT_RATIO_TOL = 1.3f
+private const val DEFAULT_CHAR_GAP_TOLERANCE = 0.6f
+private const val DEFAULT_CHAR_GAP_TOL2 = 1.5f
+private const val DEFAULT_FONT_SIZE_RATIO_TOL = 1.5f
+private const val DEFAULT_ASPECT_RATIO_TOL = 2.0f
 
 /**
  * Determines whether two quadrilaterals can be merged into the same text region.
@@ -41,46 +42,61 @@ fun quadrilateralCanMergeRegion(
     fontSizeRatioTol: Float = DEFAULT_FONT_SIZE_RATIO_TOL,
     aspectRatioTol: Float = DEFAULT_ASPECT_RATIO_TOL,
 ): Boolean {
-    // Skip empty quads
     if (a.area == 0f || b.area == 0f) return false
 
-    // Direction check: if both have explicit directions, they must match
     if (a.direction != TextDirection.AUTO &&
         b.direction != TextDirection.AUTO &&
         a.direction != b.direction
     ) return false
 
-    // Font size similarity: larger / smaller must be within tolerance
+    val charSize = minOf(a.fontSize, b.fontSize).coerceAtLeast(1f)
     val maxFs = maxOf(a.fontSize, b.fontSize)
-    val minFs = minOf(a.fontSize, b.fontSize)
-    if (minFs > 0f && maxFs / minFs > fontSizeRatioTol) return false
+    val minFs = minOf(a.fontSize, b.fontSize).coerceAtLeast(1f)
+    if (maxFs / charSize > fontSizeRatioTol) return false
 
-    // Aspect ratio compatibility
     val arA = a.aspectRatio
     val arB = b.aspectRatio
-    if (maxOf(arA, arB) / (minOf(arA, arB) + 0.001f) > aspectRatioTol) return false
+    if (arA > aspectRatioTol && arB < 1f / aspectRatioTol) return false
+    if (arB > aspectRatioTol && arA < 1f / aspectRatioTol) return false
 
-    // Distance check: must be close enough
-    val d = a.distance(b, ratio)
-    if (d > discardConnectionGap) return false
+    val dist = a.polyDistance(b)
+    if (dist > discardConnectionGap * charSize) return false
 
-    // For non-AUTO direction: check axis alignment
-    if (a.direction != TextDirection.AUTO) {
-        val aCenter = a.center
-        val bCenter = b.center
-        val isHorizontal = a.direction == TextDirection.HORIZONTAL ||
-                a.direction == TextDirection.HORIZONTAL_RTL
+    val boxA = a.aabb
+    val boxB = b.aabb
+    val x1 = boxA.left
+    val y1 = boxA.top
+    val w1 = boxA.width()
+    val h1 = boxA.height()
+    val x2 = boxB.left
+    val y2 = boxB.top
+    val w2 = boxB.width()
+    val h2 = boxB.height()
 
-        if (isHorizontal) {
-            // Horizontal text: Y-axis distance should be small (same line)
-            val yDist = abs(aCenter.y - bCenter.y) / maxFs
-            if (yDist > charGapTolerance) return false
-        } else {
-            // Vertical text: X-axis distance should be small (same column)
-            val xDist = abs(aCenter.x - bCenter.x) / maxFs
-            if (xDist > charGapTolerance) return false
+    if (a.isApproximateAxisAligned && b.isApproximateAxisAligned) {
+        if (dist < charSize * charGapTolerance) {
+            if (abs((x1 + w1 / 2f) - (x2 + w2 / 2f)) < charGapTol2) return true
+            if (w1 > h1 * ratio && h2 > w2 * ratio) return false
+            if (w2 > h2 * ratio && h1 > w1 * ratio) return false
+            return if (w1 > h1 * ratio || w2 > h2 * ratio) {
+                abs(x1 - x2) < charSize * charGapTol2 ||
+                    abs((x1 + w1) - (x2 + w2)) < charSize * charGapTol2
+            } else if (h1 > w1 * ratio || h2 > w2 * ratio) {
+                abs(y1 - y2) < charSize * charGapTol2 ||
+                    abs((y1 + h1) - (y2 + h2)) < charSize * charGapTol2
+            } else {
+                false
+            }
         }
+        return false
     }
 
-    return true
+    if (abs(a.angle - b.angle) < 15f * PI.toFloat() / 180f) {
+        val fs = minOf(a.fontSize, b.fontSize).coerceAtLeast(1f)
+        if (a.polyDistance(b) > fs * charGapTol2) return false
+        if (abs(a.fontSize - b.fontSize) / fs > 0.25f) return false
+        return true
+    }
+
+    return false
 }

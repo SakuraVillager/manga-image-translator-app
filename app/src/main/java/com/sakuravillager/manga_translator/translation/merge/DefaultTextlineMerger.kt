@@ -81,22 +81,12 @@ class DefaultTextlineMerger : TextlineMerger {
     private fun buildTextBlock(allLines: List<Quadrilateral>, indices: List<Int>): TextBlock {
         val quads = indices.map { allLines[it] }
 
-        // Direction: majority vote (exclude AUTO)
-        val directions = quads.map { it.direction }.filter { it != TextDirection.AUTO }
-        val direction = if (directions.isEmpty()) {
-            TextDirection.AUTO
-        } else {
-            directions.groupBy { it }.maxByOrNull { it.value.size }!!.key
-        }
+        val direction = resolveDirection(quads)
 
-        // Sort: horizontal → by centroid.y ascending; vertical → by centroid.x descending
-        val sorted = if (direction == TextDirection.AUTO ||
-            direction == TextDirection.HORIZONTAL ||
-            direction == TextDirection.HORIZONTAL_RTL
-        ) {
-            quads.sortedBy { it.center.y }
-        } else {
+        val sorted = if (direction == TextDirection.VERTICAL) {
             quads.sortedByDescending { it.center.x }
+        } else {
+            quads.sortedBy { it.center.y }
         }
 
         // Font size = minimum of all quads in the region
@@ -136,5 +126,27 @@ class DefaultTextlineMerger : TextlineMerger {
             bgColor = sorted.firstOrNull()?.bgColor,
             direction = direction,
         )
+    }
+
+    private fun resolveDirection(quads: List<Quadrilateral>): TextDirection {
+        val explicit = quads.map { it.direction }.filter { it != TextDirection.AUTO }
+        if (explicit.isEmpty()) {
+            return if (quads.isNotEmpty() && quads.maxOf { it.aspectRatio } < 1f) {
+                TextDirection.VERTICAL
+            } else {
+                TextDirection.HORIZONTAL
+            }
+        }
+
+        val counts = explicit.groupingBy { it }.eachCount()
+        val topTwo = counts.entries.sortedByDescending { it.value }.take(2)
+        if (topTwo.size == 1 || topTwo[0].value != topTwo[1].value) {
+            return topTwo.first().key
+        }
+
+        val best = quads.maxByOrNull {
+            maxOf(it.aspectRatio, if (it.aspectRatio == 0f) 0f else 1f / it.aspectRatio)
+        }
+        return best?.direction?.takeIf { it != TextDirection.AUTO } ?: topTwo.first().key
     }
 }
