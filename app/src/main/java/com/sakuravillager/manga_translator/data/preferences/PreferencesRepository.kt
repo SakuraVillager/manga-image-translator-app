@@ -29,6 +29,9 @@ class PreferencesRepository(
                 apiBase = preferences[PreferencesKeys.API_BASE],
                 modelName = preferences[PreferencesKeys.MODEL_NAME],
                 targetLanguage = preferences[PreferencesKeys.TARGET_LANGUAGE] ?: AppPreferences.DEFAULT_TARGET_LANGUAGE,
+                modelCtdUrl = preferences[PreferencesKeys.MODEL_CTD_URL],
+                modelOcrUrl = preferences[PreferencesKeys.MODEL_OCR_URL],
+                modelAlphabetUrl = preferences[PreferencesKeys.MODEL_ALPHABET_URL],
             )
         }
     }
@@ -117,6 +120,17 @@ class PreferencesRepository(
         }
     }
 
+    // ── Model URL overrides ─────────────────────────────────────────────────
+    suspend fun updateModelCtdUrl(url: String?) {
+        dataStore.edit { prefs -> if (url != null) prefs[PreferencesKeys.MODEL_CTD_URL] = url else prefs.remove(PreferencesKeys.MODEL_CTD_URL) }
+    }
+    suspend fun updateModelOcrUrl(url: String?) {
+        dataStore.edit { prefs -> if (url != null) prefs[PreferencesKeys.MODEL_OCR_URL] = url else prefs.remove(PreferencesKeys.MODEL_OCR_URL) }
+    }
+    suspend fun updateModelAlphabetUrl(url: String?) {
+        dataStore.edit { prefs -> if (url != null) prefs[PreferencesKeys.MODEL_ALPHABET_URL] = url else prefs.remove(PreferencesKeys.MODEL_ALPHABET_URL) }
+    }
+
     companion object PreferencesKeys {
         val THEME_MODE = stringPreferencesKey("theme_mode")
         val COLOR_SCHEME = stringPreferencesKey("color_scheme")
@@ -132,5 +146,8 @@ class PreferencesRepository(
         val API_BASE = stringPreferencesKey("api_base")
         val MODEL_NAME = stringPreferencesKey("model_name")
         val TARGET_LANGUAGE = stringPreferencesKey("target_language")
+        val MODEL_CTD_URL = stringPreferencesKey("model_ctd_url")
+        val MODEL_OCR_URL = stringPreferencesKey("model_ocr_url")
+        val MODEL_ALPHABET_URL = stringPreferencesKey("model_alphabet_url")
     }
 }

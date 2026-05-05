@@ -15,6 +15,10 @@ data class AppPreferences(
     val apiBase: String? = null,
     val modelName: String? = null,
     val targetLanguage: String = DEFAULT_TARGET_LANGUAGE,
+    // Model URL overrides (advanced settings)
+    val modelCtdUrl: String? = null,
+    val modelOcrUrl: String? = null,
+    val modelAlphabetUrl: String? = null,
 ) {
     companion object {
         const val DEFAULT_THEME_MODE = "system"

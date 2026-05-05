@@ -104,9 +104,10 @@ class CtdTextDetector(
         val tensor = TensorConverter.bitmapToNCHWTensor01(env, lb.bitmap, INPUT_SIZE, INPUT_SIZE)
 
         // ---- 3. ONNX inference ---------------------------------------------
-        // Try common input names. The model export may use different names,
-        // but "input" is the most common default.
-        val inputs = mapOf("input" to tensor)
+        // The CTD ONNX model (comictextdetector.pt.onnx) uses "images" as the
+        // input name. Read from session metadata for robustness.
+        val inputName = sess.inputNames.iterator().next()
+        val inputs = mapOf(inputName to tensor)
         val results = sess.run(inputs)
 
         try {

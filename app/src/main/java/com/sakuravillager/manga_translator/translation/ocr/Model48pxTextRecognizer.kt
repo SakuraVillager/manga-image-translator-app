@@ -1,53 +1,46 @@
-package com.sakuravillager.manga_translator.translation.ocr
+﻿package com.sakuravillager.manga_translator.translation.ocr
 
 import ai.onnxruntime.OnnxTensor
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.Color
+import android.graphics.BitmapFactory
+import android.util.Log
 import com.sakuravillager.manga_translator.translation.api.TextRecognizer
 import com.sakuravillager.manga_translator.translation.data.Quadrilateral
+import com.sakuravillager.manga_translator.translation.data.TextDirection
 import com.sakuravillager.manga_translator.translation.data.config.OcrConfig
-import com.sakuravillager.manga_translator.translation.model.ModelDownloadManager
-import com.sakuravillager.manga_translator.translation.model.ModelRegistry
-import com.sakuravillager.manga_translator.translation.onnx.OnnxSessionManager
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 import java.nio.FloatBuffer
 
 /**
- * ONNX-based 48px OCR text recognizer.
+ * CTC-based 48px OCR text recognizer using ONNX Runtime.
  *
  * Pipeline:
- * 1. Perspective crop each [Quadrilateral] to 48 px height via [Quadrilateral.getTransformedRegion].
- * 2. Sort regions by width (ascending) for efficient batching.
- * 3. Partition into chunks of [MAX_CHUNK_SIZE] and build a single batch ONNX tensor
- *    in NCHW layout normalized to [-1, 1].
- * 4. Run inference – the ONNX model runs the encoder+decoder internally and produces
- *    logits, per-character colour predictions, and colour-indicator gating outputs.
- * 5. Greedy decode (argmax) each sample from the logits.
- * 6. Extract running-average foreground / background colours with indicator gating.
+ * 1. Load the ONNX model from assets/models/ocr_ctc_48px.onnx
+ * 2. Perspective-crop each Quadrilateral to 48px height
+ * 3. Sort regions by width (matching Python reference)
+ * 4. Batch-pad to uniform width, normalize to [-1, 1]
+ * 5. Single ONNX forward -> (logits, colors)
+ * 6. CTC greedy decode (argmax -> collapse -> blank removal)
+ * 7. Extract fg/bg colors
  *
- * Model-output layout (assumed, index-based):
- *   [0] logits         – float32[batch, max_seq_len, vocab_size]
- *   [1] fg_colors      – float32[batch, max_seq_len, 3]  (values in [0,1])
- *   [2] bg_colors      – float32[batch, max_seq_len, 3]
- *   [3] fg_indicators  – float32[batch, max_seq_len, 2]  (has_fg if ind[1] > ind[0])
- *   [4] bg_indicators  – float32[batch, max_seq_len, 2]  (has_bg if ind[1] > ind[0])
- *
- * @property modelDownloadManager  handles model-file retrieval from network or cache.
- * @property sessionManager        manages [OrtSession] lifecycle.
- * @property context               Android context for asset-based dictionary loading.
+ * Memory-safe design:
+ * - Batch size is dynamically adjusted based on region widths to bound
+ *   the input tensor allocation (the main remaining large allocation).
+ * - Per-sample logits are read from the FloatBuffer one timestep at a time
+ *   via a reused FloatArray(D) buffer (~77KB) instead of allocating a
+ *   FloatArray(TxD) (~46MB for wide regions).
+ * - Regions are sorted by width (matching Python) so similar-width regions
+ *   are batched together, maximizing padding efficiency.
  */
 class Model48pxTextRecognizer(
-    private val modelDownloadManager: ModelDownloadManager,
-    private val sessionManager: OnnxSessionManager,
     private val context: Context,
 ) : TextRecognizer {
 
-    override val name: String = "Model48pxTextRecognizer"
-
+    override val name: String = "Model48pxCtcRecognizer"
     private var _isReady = false
     override val isReady: Boolean get() = _isReady
 
@@ -55,326 +48,187 @@ class Model48pxTextRecognizer(
     private val env: OrtEnvironment = OrtEnvironment.getEnvironment()
 
     companion object {
-        /** Fixed input height expected by the ONNX model. */
         const val TEXT_HEIGHT = 48
-
-        /** Maximum number of textlines forwarded in a single ONNX inference call. */
         const val MAX_CHUNK_SIZE = 16
-
-        /** Maximum sequence length the decoder can produce. */
-        const val MAX_SEQ_LENGTH = 255
+        const val TAG = "CtcRecognizer"
 
         /**
-         * Minimum softmax probability for a predicted token to be accepted.
-         * Tokens below this threshold are treated as end-of-sequence.
+         * Maximum estimated bytes for the input tensor [N, 3, 48, maxW] x 4 bytes/float.
+         * This is the dominant remaining allocation after eliminating per-sample
+         * FloatArray(TxD). Budget: ~10MB keeps typical batches small enough for
+         * low-memory devices while remaining responsive for narrow regions.
          */
-        const val PROB_THRESHOLD = 0.2f
+        private const val MAX_INPUT_TENSOR_BYTES = 10 * 1024 * 1024L
     }
 
-    // ──────────────────────────────────────────────────────────────
-    //  Lifecycle
-    // ──────────────────────────────────────────────────────────────
-
     override suspend fun prepare() {
-        val modelFile = modelDownloadManager.ensureModel(ModelRegistry.OCR_48PX_MODEL)
-        val modelBytes = modelFile.readBytes()
-        session = sessionManager.createSession(modelBytes)
+        val modelBytes = context.assets.open("models/ocr_ctc_48px.onnx").use { it.readBytes() }
+        session = env.createSession(modelBytes, OrtSession.SessionOptions())
         OcrDictionary.load(context)
         _isReady = true
+        Log.i(TAG, "CTC OCR model loaded (${modelBytes.size / 1024} KB)")
     }
 
     override suspend fun release() {
-        session?.let { sessionManager.closeSession(it) }
+        session?.close()
         session = null
         _isReady = false
     }
-
-    // ──────────────────────────────────────────────────────────────
-    //  Recognise
-    // ──────────────────────────────────────────────────────────────
 
     override suspend fun recognize(
         bitmap: Bitmap,
         textlines: List<Quadrilateral>,
         config: OcrConfig,
-    ): List<Quadrilateral> = withContext(Dispatchers.Default) {
-        if (textlines.isEmpty()) return@withContext textlines
-        val sess = session ?: error("$name has not been prepared – call prepare() first")
+    ): List<Quadrilateral> {
+        if (textlines.isEmpty() || session == null) return textlines
+        val sess = session!!
 
-        // 1. Perspective crop each textline to 48 px height.
-        val cropped = textlines.map { quad ->
-            val region = quad.getTransformedRegion(bitmap, quad.direction, TEXT_HEIGHT)
-            CroppedRegion(region, quad)
+        // 1. Extract regions
+        val regions = textlines.map { q ->
+            q.getTransformedRegion(bitmap, TextDirection.AUTO, TEXT_HEIGHT)
+                ?: Bitmap.createBitmap(1, TEXT_HEIGHT, Bitmap.Config.ARGB_8888)
         }
 
-        // 2. Sort by width ascending for tighter batching.
-        val sorted = cropped.sortedBy { it.bitmap.width }
+        val results = textlines.toMutableList()
 
-        // 3. Process in batches of MAX_CHUNK_SIZE.
-        val results = mutableListOf<Quadrilateral>()
-        sorted.chunked(MAX_CHUNK_SIZE).forEach { batch ->
-            processBatch(sess, batch, results)
-        }
-        results
-    }
+        // 2. Sort by width (matching Python reference -- all 4 OCR models do this)
+        //    so similar-width regions are batched together, maximizing padding efficiency.
+        val sortedIndices = regions.indices.sortedBy { regions[it].width }
 
-    // ──────────────────────────────────────────────────────────────
-    //  Batch inference
-    // ──────────────────────────────────────────────────────────────
-
-    /**
-     * Runs ONNX inference on a single batch of [CroppedRegion] and appends
-     * the decoded [Quadrilateral] results to [out].
-     */
-    private fun processBatch(
-        sess: OrtSession,
-        batch: List<CroppedRegion>,
-        out: MutableList<Quadrilateral>,
-    ) {
-        val batchSize = batch.size
-
-        // Largest width in this batch, rounded up to the nearest multiple of 4.
-        val maxW = batch.maxOf { it.bitmap.width }
-        val alignedW = (maxW + 3) / 4 * 4
-
-        // ── Build batch tensor ────────────────────────────────────
-        // Shape: [N, 3, TEXT_HEIGHT, alignedW], NCHW, normalized to [-1, 1].
-        val batchInput = FloatArray(batchSize * 3 * TEXT_HEIGHT * alignedW)
-
-        for ((idx, cropped) in batch.withIndex()) {
-            val srcW = cropped.bitmap.width
-            val srcH = cropped.bitmap.height
-            val pixels = IntArray(alignedW * TEXT_HEIGHT)
-
-            // Left-align each cropped region; right-side padding stays 0 (→ black, ~ -1).
-            cropped.bitmap.getPixels(pixels, 0, alignedW, 0, 0, srcW, srcH)
-
-            val baseOffset = idx * 3 * TEXT_HEIGHT * alignedW
-            val ch0Offset = baseOffset
-            val ch1Offset = baseOffset + TEXT_HEIGHT * alignedW
-            val ch2Offset = baseOffset + 2 * TEXT_HEIGHT * alignedW
-
-            for (y in 0 until TEXT_HEIGHT) {
-                val rowStart = y * alignedW
-                for (x in 0 until alignedW) {
-                    val pixel = pixels[rowStart + x]
-                    val r = (((pixel shr 16) and 0xFF) - 127.5f) / 127.5f
-                    val g = (((pixel shr 8) and 0xFF) - 127.5f) / 127.5f
-                    val b = ((pixel and 0xFF) - 127.5f) / 127.5f
-                    val chPos = rowStart + x
-                    batchInput[ch0Offset + chPos] = r
-                    batchInput[ch1Offset + chPos] = g
-                    batchInput[ch2Offset + chPos] = b
+        var batchStart = 0
+        while (batchStart < sortedIndices.size) {
+            // 2a. Dynamically size batch based on region widths to bound
+            //     input-tensor memory. Input shape: [N, 3, 48, maxW] x 4 bytes/float.
+            var batchEnd = batchStart
+            var batchMaxW = 0
+            while (batchEnd < sortedIndices.size && (batchEnd - batchStart) < MAX_CHUNK_SIZE) {
+                val testW = regions[sortedIndices[batchEnd]].width
+                val candidateMaxW = maxOf(batchMaxW, testW)
+                val batchSize = batchEnd - batchStart + 1
+                val estimatedInputBytes = batchSize.toLong() * 3L * TEXT_HEIGHT * candidateMaxW * 4L
+                // Accept if within budget, or always accept at least 1 item
+                if (estimatedInputBytes <= MAX_INPUT_TENSOR_BYTES || batchSize == 1) {
+                    batchMaxW = candidateMaxW
+                    batchEnd++
+                } else {
+                    break
                 }
             }
-        }
 
-        // ── Inference ─────────────────────────────────────────────
-        val shape = longArrayOf(
-            batchSize.toLong(), 3L, TEXT_HEIGHT.toLong(), alignedW.toLong(),
-        )
-        val tensor = OnnxTensor.createTensor(env, FloatBuffer.wrap(batchInput), shape)
+            val batchIndices = sortedIndices.subList(batchStart, batchEnd)
+            val N = batchIndices.size
+            val widths = batchIndices.map { regions[it].width }
+            val maxW = (4 * ((widths.maxOrNull() ?: 1) + 7) / 4) + 128
 
-        try {
-            // The input name "input" matches the common ONNX export convention.
-            // Adjust if the exported model uses a different input name.
-            val outputs = sess.run(mapOf("input" to tensor))
+            // 2b. Build input tensor: [N, 3, 48, maxW], float32, normalized to [-1, 1]
+            val tensorSize = N * 3 * TEXT_HEIGHT * maxW
+            val floatBuf = FloatBuffer.allocate(tensorSize)
+            val pixelBuf = IntArray(TEXT_HEIGHT * maxW)
 
-            try {
-                for (idx in 0 until batchSize) {
-                    val quad = batch[idx].quadrilateral
+            for (localIdx in 0 until N) {
+                val bmp = regions[batchIndices[localIdx]]
+                val w = bmp.width
+                bmp.getPixels(pixelBuf, 0, maxW, 0, 0, w, TEXT_HEIGHT)
+                if (w < maxW) {
+                    // Pad right side with zeros
+                    for (y in 0 until TEXT_HEIGHT) {
+                        for (x in w until maxW) {
+                            pixelBuf[y * maxW + x] = 0
+                        }
+                    }
+                }
 
-                    // Greedy text decode from logits.
-                    val charIds = greedyDecode(outputs, idx, batchSize)
-                    val decoded = OcrDictionary.decodeTokenIds(charIds)
+                for (y in 0 until TEXT_HEIGHT) {
+                    for (x in 0 until maxW) {
+                        val px = pixelBuf[y * maxW + x]
+                        val r = ((px shr 16) and 0xFF) / 127.5f - 1f
+                        val g = ((px shr 8) and 0xFF) / 127.5f - 1f
+                        val b = (px and 0xFF) / 127.5f - 1f
+                        val base = localIdx * 3 * TEXT_HEIGHT * maxW
+                        floatBuf.put(base + 0 * TEXT_HEIGHT * maxW + y * maxW + x, r)
+                        floatBuf.put(base + 1 * TEXT_HEIGHT * maxW + y * maxW + x, g)
+                        floatBuf.put(base + 2 * TEXT_HEIGHT * maxW + y * maxW + x, b)
+                    }
+                }
+            }
 
-                    // Running-average colour extraction.
-                    val (fgColor, bgColor) = extractColors(outputs, idx, batchSize)
+            // 3. Run ONNX inference
+            val shape = longArrayOf(N.toLong(), 3L, TEXT_HEIGHT.toLong(), maxW.toLong())
+            OnnxTensor.createTensor(env, floatBuf, shape).use { imgTensor ->
+                val outputs = sess.run(mapOf("img" to imgTensor))
+                val logits = outputs.get(0) as OnnxTensor
+                val colors = (outputs.get(1) as OnnxTensor)
 
-                    out += quad.copy(
-                        text = decoded,
-                        fgColor = fgColor,
-                        bgColor = bgColor,
+                val logitsBuf = logits.floatBuffer
+                val colorsBuf = colors.floatBuffer
+                val T = logits.info.shape[1].toInt()
+                val D = logits.info.shape[2].toInt()
+                val seqLen = T * D
+                val colLen = T * 6
+
+                // 4. CTC decode per sample -- read from FloatBuffer one timestep at a time.
+                //
+                //    CRITICAL: We use a reused FloatArray(D) buffer (~77KB for D=19264)
+                //    instead of allocating FloatArray(TxD) per sample (~46MB for wide
+                //    regions). This eliminates the primary OOM vector.
+                val stepLogits = FloatArray(D)
+                val stepColors = FloatArray(6)
+
+                for (localIdx in 0 until N) {
+                    val decoded = mutableListOf<Pair<Int, Float>>()
+                    val keptSteps = mutableListOf<Int>()
+
+                    // Greedy CTC decode: argmax per timestep
+                    var lastId = OcrDictionary.BLANK
+                    for (t in 0 until T) {
+                        logitsBuf.position(localIdx * seqLen + t * D)
+                        logitsBuf.get(stepLogits, 0, D)
+
+                        var maxVal = Float.NEGATIVE_INFINITY
+                        var maxIdx = OcrDictionary.BLANK
+                        for (d in 0 until D) {
+                            if (stepLogits[d] > maxVal) {
+                                maxVal = stepLogits[d]
+                                maxIdx = d
+                            }
+                        }
+                        if (maxIdx != OcrDictionary.BLANK && maxIdx != lastId) {
+                            decoded.add(maxIdx to maxVal)
+                            keptSteps.add(t)
+                        }
+                        lastId = maxIdx
+                    }
+
+                    val text = OcrDictionary.ctcDecodeToText(decoded)
+
+                    // Extract colors from FloatBuffer per kept timestep
+                    var sumFr = 0f; var sumFg = 0f; var sumFb = 0f
+                    var sumBr = 0f; var sumBg = 0f; var sumBb = 0f
+                    for (t in keptSteps) {
+                        colorsBuf.position(localIdx * colLen + t * 6)
+                        colorsBuf.get(stepColors, 0, 6)
+                        sumFr += stepColors[0]; sumFg += stepColors[1]; sumFb += stepColors[2]
+                        sumBr += stepColors[3]; sumBg += stepColors[4]; sumBb += stepColors[5]
+                    }
+                    val numKept = keptSteps.size
+                    fun clamp(v: Float) = (v * 255).toInt().coerceIn(0, 255)
+                    val fg = if (numKept > 0) intArrayOf(clamp(sumFr / numKept), clamp(sumFg / numKept), clamp(sumFb / numKept))
+                             else intArrayOf(0, 0, 0)
+                    val bg = if (numKept > 0) intArrayOf(clamp(sumBr / numKept), clamp(sumBg / numKept), clamp(sumBb / numKept))
+                             else intArrayOf(255, 255, 255)
+
+                    val qIdx = batchIndices[localIdx]
+                    results[qIdx] = results[qIdx].copy(
+                        text = text,
+                        fgColor = (0xFF shl 24) or (fg[0] shl 16) or (fg[1] shl 8) or fg[2],
+                        bgColor = (0xFF shl 24) or (bg[0] shl 16) or (bg[1] shl 8) or bg[2],
                     )
                 }
-            } finally {
                 outputs.close()
             }
-        } finally {
-            tensor.close()
-        }
-    }
-
-    // ──────────────────────────────────────────────────────────────
-    //  Greedy decode
-    // ──────────────────────────────────────────────────────────────
-
-    /**
-     * Greedy (argmax) decoding for a single sample from the batched model output.
-     *
-     * Expected output [0]: logits tensor with shape `[batch, seq_len, vocab_size]`.
-     * The ONNX model runs the autoregressive loop internally; this method simply
-     * walks the logit sequence position by position taking the argmax and stopping
-     * at the END token.
-     */
-    private fun greedyDecode(
-        outputs: OrtSession.Result,
-        sampleIdx: Int,
-        batchSize: Int,
-    ): IntArray {
-        val logitsTensor = outputs.get(0) as OnnxTensor
-        val logitsBuffer = logitsTensor.floatBuffer
-        val logitsShape = logitsTensor.info.shape
-        val seqLen = logitsShape[1].toInt()
-        val vocabSize = logitsShape[2].toInt()
-
-        val ids = mutableListOf<Int>()
-        val sampleStride = seqLen * vocabSize
-        val sampleBase = sampleIdx * sampleStride
-
-        for (pos in 0 until seqLen.coerceAtMost(MAX_SEQ_LENGTH)) {
-            val posBase = sampleBase + pos * vocabSize
-
-            // Argmax at this position.
-            var bestIdx = 0
-            var bestVal = Float.NEGATIVE_INFINITY
-            for (v in 0 until vocabSize) {
-                val vv = logitsBuffer.get(posBase + v)
-                if (vv > bestVal) {
-                    bestVal = vv
-                    bestIdx = v
-                }
-            }
-
-            // End-of-sequence.
-            if (bestIdx == OcrDictionary.END) break
-
-            // Skip special tokens.
-            if (bestIdx == OcrDictionary.PAD ||
-                bestIdx == OcrDictionary.START ||
-                bestIdx == OcrDictionary.SEP ||
-                bestIdx == OcrDictionary.UNK
-            ) continue
-
-            ids.add(bestIdx)
+            batchStart = batchEnd
         }
 
-        return ids.toIntArray()
+        return results.filterNot { it.text.isBlank() }
     }
-
-    // ──────────────────────────────────────────────────────────────
-    //  Colour extraction
-    // ──────────────────────────────────────────────────────────────
-
-    /**
-     * Extracts running-average foreground and background colours from the
-     * per-character colour predictions, gated by indicator outputs.
-     *
-     * Expected output layout (index-based):
-     *   [1] fg_colors     – [batch, seq_len, 3]  values in [0, 1]
-     *   [2] bg_colors     – [batch, seq_len, 3]
-     *   [3] fg_indicators – [batch, seq_len, 2]  has_fg if ind[1] > ind[0]
-     *   [4] bg_indicators – [batch, seq_len, 2]  has_bg if ind[1] > ind[0]
-     *
-     * Returns (fgColor, bgColor) as Android [Color] ints, or `null` when no
-     * colour is predicted for a channel.
-     */
-    private fun extractColors(
-        outputs: OrtSession.Result,
-        sampleIdx: Int,
-        batchSize: Int,
-    ): Pair<Int?, Int?> {
-        // Guard: fewer than 5 outputs means the model does not emit colour
-        // predictions (e.g. a CTC-based variant).
-        if (outputs.size() < 5) return Pair(null, null)
-
-        val fgColTensor = outputs.get(1) as OnnxTensor
-        val bgColTensor = outputs.get(2) as OnnxTensor
-        val fgIndTensor = outputs.get(3) as OnnxTensor
-        val bgIndTensor = outputs.get(4) as OnnxTensor
-
-        val seqLen = fgColTensor.info.shape[1].toInt()
-
-        val fgColBuf = fgColTensor.floatBuffer
-        val bgColBuf = bgColTensor.floatBuffer
-        val fgIndBuf = fgIndTensor.floatBuffer
-        val bgIndBuf = bgIndTensor.floatBuffer
-
-        val colorStride = seqLen * 3
-        val indStride = seqLen * 2
-        val fgColBase = sampleIdx * colorStride
-        val bgColBase = sampleIdx * colorStride
-        val fgIndBase = sampleIdx * indStride
-        val bgIndBase = sampleIdx * indStride
-
-        var fgSumR = 0f
-        var fgSumG = 0f
-        var fgSumB = 0f
-        var fgCount = 0
-
-        var bgSumR = 0f
-        var bgSumG = 0f
-        var bgSumB = 0f
-        var bgCount = 0
-
-        for (i in 0 until seqLen) {
-            // Indicator gating.
-            val fgiOff = fgIndBase + i * 2
-            val bgiOff = bgIndBase + i * 2
-            val hasFg = fgIndBuf.get(fgiOff + 1) > fgIndBuf.get(fgiOff)
-            val hasBg = bgIndBuf.get(bgiOff + 1) > bgIndBuf.get(bgiOff)
-
-            // RGB colour values (model outputs [0, 1], scale to [0, 255]).
-            val fcOff = fgColBase + i * 3
-            val bcOff = bgColBase + i * 3
-
-            if (hasFg) {
-                fgSumR += fgColBuf.get(fcOff) * 255f
-                fgSumG += fgColBuf.get(fcOff + 1) * 255f
-                fgSumB += fgColBuf.get(fcOff + 2) * 255f
-                fgCount++
-            }
-
-            if (hasBg) {
-                bgSumR += bgColBuf.get(bcOff) * 255f
-                bgSumG += bgColBuf.get(bcOff + 1) * 255f
-                bgSumB += bgColBuf.get(bcOff + 2) * 255f
-                bgCount++
-            } else {
-                // Fallback: use the foreground colour as background.
-                bgSumR += fgColBuf.get(fcOff) * 255f
-                bgSumG += fgColBuf.get(fcOff + 1) * 255f
-                bgSumB += fgColBuf.get(fcOff + 2) * 255f
-                bgCount++
-            }
-        }
-
-        val fgColor = if (fgCount > 0) {
-            Color.rgb(
-                (fgSumR / fgCount).toInt().coerceIn(0, 255),
-                (fgSumG / fgCount).toInt().coerceIn(0, 255),
-                (fgSumB / fgCount).toInt().coerceIn(0, 255),
-            )
-        } else null
-
-        val bgColor = if (bgCount > 0) {
-            Color.rgb(
-                (bgSumR / bgCount).toInt().coerceIn(0, 255),
-                (bgSumG / bgCount).toInt().coerceIn(0, 255),
-                (bgSumB / bgCount).toInt().coerceIn(0, 255),
-            )
-        } else null
-
-        return Pair(fgColor, bgColor)
-    }
-
-    // ──────────────────────────────────────────────────────────────
-    //  Internal data
-    // ──────────────────────────────────────────────────────────────
-
-    /** Pairs a perspective-cropped [Bitmap] with its source [Quadrilateral]. */
-    private data class CroppedRegion(
-        val bitmap: Bitmap,
-        val quadrilateral: Quadrilateral,
-    )
 }

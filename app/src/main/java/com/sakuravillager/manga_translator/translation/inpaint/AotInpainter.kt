@@ -121,11 +121,15 @@ class AotInpainter(
 
         try {
             // ---- 4. Build NCHW float32 tensor [1, 4, H, W] --------------------
-            // Channel 0: MASK (-1.0 or 1.0, threshold at 127)
-            //   Python source: mask/127.5-1.0 → [-1,1]; mask>0 → 1.0; bg stays -1.0
-            // Channel 1: R (normalized to [-1, 1])
-            // Channel 2: G (normalized to [-1, 1])
-            // Channel 3: B (normalized to [-1, 1])
+                // Channel 0: MASK (0.0 or 1.0, threshold at 127)
+                // Channel 1: R normalized to [-1, 1]
+                // Channel 2: G normalized to [-1, 1]
+                // Channel 3: B normalized to [-1, 1]
+                //
+                // Match the original Python inference path:
+                //   img_torch = img / 127.5 - 1.0
+                //   mask_torch = 0/1
+                //   img_torch *= (1 - mask_torch)
             val area = procW * procH
             val floatArray = FloatArray(4 * area)
             val pixels = IntArray(area)
@@ -137,14 +141,24 @@ class AotInpainter(
             for (i in 0 until area) {
                 val px = pixels[i]
                 val mx = maskPixels[i]
+                val maskValue = if (((mx shr 16) and 0xFF) > 127) 1.0f else 0.0f
 
-                // MASK channel: 1.0 (fg) / -1.0 (bg), threshold at 127
-                floatArray[i] = if (((mx shr 16) and 0xFF) > 127) 1.0f else -1.0f
+                // MASK channel: 1.0 (hole) / 0.0 (keep)
+                floatArray[i] = maskValue
 
-                // RGB normalized to [-1, 1]: (value / 127.5) - 1.0
-                floatArray[1 * area + i] = (((px shr 16) and 0xFF) - 127.5f) / 127.5f
-                floatArray[2 * area + i] = (((px shr 8) and 0xFF) - 127.5f) / 127.5f
-                floatArray[3 * area + i] = ((px and 0xFF) - 127.5f) / 127.5f
+                // RGB normalized to [-1, 1], then masked pixels are zeroed.
+                val r = (((px shr 16) and 0xFF) - 127.5f) / 127.5f
+                val g = (((px shr 8) and 0xFF) - 127.5f) / 127.5f
+                val b = ((px and 0xFF) - 127.5f) / 127.5f
+                if (maskValue > 0f) {
+                    floatArray[1 * area + i] = 0f
+                    floatArray[2 * area + i] = 0f
+                    floatArray[3 * area + i] = 0f
+                } else {
+                    floatArray[1 * area + i] = r
+                    floatArray[2 * area + i] = g
+                    floatArray[3 * area + i] = b
+                }
             }
 
             val shape = longArrayOf(1L, 4L, procH.toLong(), procW.toLong())

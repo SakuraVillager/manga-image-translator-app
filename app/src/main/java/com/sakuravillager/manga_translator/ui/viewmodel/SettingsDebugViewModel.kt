@@ -19,7 +19,7 @@ class SettingsDebugViewModel : ViewModel() {
     val logs: StateFlow<List<LogEntry>> = _logs.asStateFlow()
 
     fun refreshLogs() {
-        _logs.value = AppLogger.getLogs()
+        _logs.value = AppLogger.getPersistedLogs()
     }
 
     fun clearLogs() {

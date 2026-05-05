@@ -53,9 +53,7 @@ fun SettingsScreen(
             icon = Icons.Default.Translate,
             title = "Translation",
             subtitle = "Translator, OCR, text detection",
-            onClick = {
-                Toast.makeText(context, "[test] 设置项暂不可修改", Toast.LENGTH_SHORT).show()
-            }
+            onClick = onNavigateToTranslation
         )
 
         SettingsListItem(

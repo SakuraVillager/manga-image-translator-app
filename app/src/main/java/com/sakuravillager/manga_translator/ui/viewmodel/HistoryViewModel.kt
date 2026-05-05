@@ -1,6 +1,5 @@
 package com.sakuravillager.manga_translator.ui.viewmodel
 
-import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.sakuravillager.manga_translator.data.local.TranslationHistoryDao
@@ -13,6 +12,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.io.File
 
@@ -58,12 +58,14 @@ class HistoryViewModel(
     fun deleteHistory(id: Long) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                // 1. Find the entity by collecting from DB (single shot)
-                val entity = dao.getById(id).let { flow ->
-                    var result: TranslationHistoryEntity? = null
-                    flow.collect { result = it; return@collect }
-                    result
-                } ?: return@launch
+                AppLogger.i("History", "Deleting history: id=$id")
+                
+                // 1. Get the entity first
+                val entity = dao.getById(id).first()
+                if (entity == null) {
+                    AppLogger.w("History", "History not found: id=$id")
+                    return@launch
+                }
 
                 // 2. Delete associated image files
                 listOfNotNull(
@@ -71,12 +73,19 @@ class HistoryViewModel(
                     entity.resultImagePath,
                     entity.coverImageUri,
                 ).forEach { path ->
-                    try { File(path).delete() } catch (_: Exception) {}
+                    if (path.isNotBlank()) {
+                        try { 
+                            val deleted = File(path).delete()
+                            AppLogger.i("History", "Deleted file: $path, success=$deleted")
+                        } catch (e: Exception) {
+                            AppLogger.w("History", "Failed to delete file: $path, ${e.message}")
+                        }
+                    }
                 }
 
                 // 3. Delete from Room database
                 dao.delete(entity)
-                AppLogger.i("History", "Deleted history: id=$id")
+                AppLogger.i("History", "Deleted history from DB: id=$id")
             } catch (e: Exception) {
                 AppLogger.e("History", "Failed to delete history: ${e.message}", e)
             }

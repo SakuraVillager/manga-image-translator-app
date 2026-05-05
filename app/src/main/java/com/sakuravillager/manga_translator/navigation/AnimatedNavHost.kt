@@ -1,11 +1,13 @@
 package com.sakuravillager.manga_translator.navigation
 
+import android.net.Uri
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInHorizontally
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import com.sakuravillager.manga_translator.data.logging.AppLogger
 import androidx.navigation.NavHostController
@@ -39,7 +41,9 @@ fun AnimatedNavHost(
     ) {
         // 1. Home
         composable(AppRoutes.Home.route) {
-            AppLogger.d("Navigation", "Navigated to Home")
+            LaunchedEffect(Unit) {
+                AppLogger.d("Navigation", "Navigated to Home")
+            }
             HomeScreen(
                 onNavigate = { navController.navigate(AppRoutes.SelectPhoto.route) }
             )
@@ -47,7 +51,9 @@ fun AnimatedNavHost(
 
         // 2. History
         composable(AppRoutes.History.route) {
-            AppLogger.d("Navigation", "Navigated to History")
+            LaunchedEffect(Unit) {
+                AppLogger.d("Navigation", "Navigated to History")
+            }
             HistoryScreen(
                 onHistoryItemClick = { id: Long ->
                     navController.navigate("${AppRoutes.HistoryDetail.route}/$id")
@@ -61,7 +67,9 @@ fun AnimatedNavHost(
             arguments = listOf(navArgument("id") { type = NavType.LongType })
         ) { backStackEntry ->
             val id = backStackEntry.arguments?.getLong("id") ?: 0L
-            AppLogger.d("Navigation", "Navigated to HistoryDetail: id=$id")
+            LaunchedEffect(Unit) {
+                AppLogger.d("Navigation", "Navigated to HistoryDetail: id=$id")
+            }
             HistoryDetailScreen(
                 historyId = id,
                 onBack = { navController.popBackStack() }
@@ -70,11 +78,18 @@ fun AnimatedNavHost(
 
         // 4. Select Photo
         composable(AppRoutes.SelectPhoto.route) {
-            AppLogger.d("Navigation", "Navigated to SelectPhoto")
+            LaunchedEffect(Unit) {
+                AppLogger.d("Navigation", "Navigated to SelectPhoto")
+            }
             SelectPhotoScreen(
                 onBack = { navController.popBackStack() },
-                onNavigateToWorkspace = {
-                    navController.navigate(AppRoutes.Workspace.route + "/selected")
+                onNavigateToWorkspace = { selectedImages ->
+                    val encodedUris = Uri.encode(selectedImages.joinToString(separator = "\n") { it.toString() })
+                    AppLogger.i(
+                        "Navigation",
+                        "Opening Workspace with ${selectedImages.size} selected images"
+                    )
+                    navController.navigate(AppRoutes.Workspace.route + "/$encodedUris")
                 }
             )
         }
@@ -84,15 +99,28 @@ fun AnimatedNavHost(
             route = AppRoutes.Workspace.route + "/{imageUris}",
             arguments = listOf(navArgument("imageUris") { type = NavType.StringType })
         ) {
-            AppLogger.d("Navigation", "Navigated to Workspace")
+            val rawImageUris = it.arguments?.getString("imageUris").orEmpty()
+            val imageUris = if (rawImageUris.isBlank()) {
+                emptyList()
+            } else {
+                Uri.decode(rawImageUris)
+                    .split('\n')
+                    .filter { uri -> uri.isNotBlank() }
+            }
+            LaunchedEffect(Unit) {
+                AppLogger.d("Navigation", "Navigated to Workspace with ${imageUris.size} image(s)")
+            }
             WorkspaceScreen(
+                imageUris = imageUris,
                 onBack = { navController.popBackStack() }
             )
         }
 
         // 6. Settings
         composable(AppRoutes.Settings.route) {
-            AppLogger.d("Navigation", "Navigated to Settings")
+            LaunchedEffect(Unit) {
+                AppLogger.d("Navigation", "Navigated to Settings")
+            }
             SettingsScreen(
                 onBack = { navController.popBackStack() },
                 onNavigateToAppearance = { navController.navigate(AppRoutes.SettingsAppearance.route) },
@@ -104,25 +132,33 @@ fun AnimatedNavHost(
 
         // 7. Settings Appearance
         composable(AppRoutes.SettingsAppearance.route) {
-            AppLogger.d("Navigation", "Navigated to SettingsAppearance")
+            LaunchedEffect(Unit) {
+                AppLogger.d("Navigation", "Navigated to SettingsAppearance")
+            }
             SettingsAppearanceScreen(onBack = { navController.popBackStack() })
         }
 
         // 8. Settings Translation
         composable(AppRoutes.SettingsTranslation.route) {
-            AppLogger.d("Navigation", "Navigated to SettingsTranslation")
+            LaunchedEffect(Unit) {
+                AppLogger.d("Navigation", "Navigated to SettingsTranslation")
+            }
             SettingsTranslationScreen(onBack = { navController.popBackStack() })
         }
 
         // 9. Settings Debug
         composable(AppRoutes.SettingsDebug.route) {
-            AppLogger.d("Navigation", "Navigated to SettingsDebug")
+            LaunchedEffect(Unit) {
+                AppLogger.d("Navigation", "Navigated to SettingsDebug")
+            }
             SettingsDebugScreen(onBack = { navController.popBackStack() })
         }
 
         // 10. Settings About
         composable(AppRoutes.SettingsAbout.route) {
-            AppLogger.d("Navigation", "Navigated to SettingsAbout")
+            LaunchedEffect(Unit) {
+                AppLogger.d("Navigation", "Navigated to SettingsAbout")
+            }
             SettingsAboutScreen(onBack = { navController.popBackStack() })
         }
     }

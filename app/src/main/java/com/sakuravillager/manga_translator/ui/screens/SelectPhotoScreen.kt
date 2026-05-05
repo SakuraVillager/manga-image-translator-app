@@ -1,6 +1,7 @@
 package com.sakuravillager.manga_translator.ui.screens
 
 import android.os.Build
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -53,7 +54,7 @@ import com.sakuravillager.manga_translator.ui.viewmodel.SelectPhotoViewModel
 @Composable
 fun SelectPhotoScreen(
     onBack: () -> Unit,
-    onNavigateToWorkspace: () -> Unit,
+    onNavigateToWorkspace: (List<Uri>) -> Unit,
     viewModel: SelectPhotoViewModel = viewModel()
 ) {
     val selectedImages by viewModel.selectedImages.collectAsState()
@@ -122,7 +123,13 @@ fun SelectPhotoScreen(
                 ) {
                     SelectPhotoButton(
                         selectedCount = selectedImages.size,
-                        onClick = onNavigateToWorkspace
+                        onClick = {
+                            AppLogger.i(
+                                "SelectPhoto",
+                                "Translate button clicked with ${selectedImages.size} images"
+                            )
+                            onNavigateToWorkspace(selectedImages)
+                        }
                     )
                 }
             }

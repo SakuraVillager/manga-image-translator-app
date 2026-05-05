@@ -5,82 +5,114 @@ import java.io.BufferedReader
 import java.io.InputStreamReader
 
 /**
- * Loads the OCR character dictionary from [alphabet-all-v7.txt] in app assets
+ * Loads the CTC OCR character dictionary from [models/alphabet-all-v5.txt]
  * and decodes model token IDs back to text.
  *
- * Token layout (matched to Python model_48px.py vocabulary):
- * - 0: <PAD>   – padding, skip in decode
- * - 1: <S>     – start-of-sequence, skip in decode
- * - 2: </S>    – end-of-sequence, stop decode
- * - 3: <SEP>   – separator, skip in decode
- * - 4: <UNK>   – unknown, skip in decode
- * - 5: <SP>    – space, emit ' '
- * - 6+:        – actual UTF-8 characters from the alphabet file
+ * CTC-blind (blank) token is <PAD> = 0.
+ * Decode: collapse consecutive identical non-blank tokens.
  */
 object OcrDictionary {
 
-    // ── Special token IDs ──────────────────────────────────────────────
-    const val PAD = 0
+    const val BLANK = 0
     const val START = 1
     const val END = 2
     const val SEP = 3
     const val UNK = 4
     const val SPACE = 5
 
-    // ── Cached dictionary ──────────────────────────────────────────────
     @Volatile
     private var _chars: List<String>? = null
 
-    /** The full character list indexed by token ID. */
     val chars: List<String>
         get() = _chars ?: error("OcrDictionary not loaded. Call load(context) first.")
 
-    /** Number of entries in the dictionary (including special tokens). */
     val size: Int
         get() = chars.size
 
-    // ── Load ───────────────────────────────────────────────────────────
     /**
-     * Loads the dictionary from [alphabet-all-v7.txt] in the app assets folder.
-     *
-     * This is a fast synchronous local-file read. Calling it multiple times
-     * is safe – the result is cached after the first load.
+     * Loads dictionary from assets/models/alphabet-all-v5.txt.
+     * Cached after first call.
      */
     fun load(context: Context): List<String> {
         _chars?.let { return it }
-
         val reader = BufferedReader(
-            InputStreamReader(context.assets.open("alphabet-all-v7.txt"), "UTF-8"),
+            InputStreamReader(context.assets.open("models/alphabet-all-v5.txt"), "UTF-8"),
         )
         val lines = reader.readLines()
         reader.close()
-
         _chars = lines
         return lines
     }
 
-    // ── Decode ─────────────────────────────────────────────────────────
     /**
-     * Decodes an array of token IDs produced by the OCR model back into
-     * a human-readable string.
+     * CTC greedy decode: argmax → collapse consecutive duplicates → remove blank.
      *
-     * - Special tokens (PAD / START / SEP / UNK) are silently skipped.
-     * - END (</S>) stops decoding immediately.
-     * - SPACE (<SP>) is emitted as a regular space character.
-     * - All other IDs are looked up in the dictionary and appended.
+     * @param logits raw logits [T, D] or flattened [T * D]
+     * @param T number of timesteps
+     * @param D vocab size
+     * @return list of (charToken, logProbability)
      */
-    fun decodeTokenIds(ids: IntArray): String {
-        val charsList = _chars ?: error("OcrDictionary not loaded. Call load(context) first.")
-        val sb = StringBuilder(ids.size)
+    fun ctcGreedyDecode(logits: FloatArray, T: Int, D: Int): List<Pair<Int, Float>> {
+        val result = mutableListOf<Pair<Int, Float>>()
+        var lastId = BLANK
+        for (t in 0 until T) {
+            val offset = t * D
+            // softmax → argmax
+            var maxVal = Float.NEGATIVE_INFINITY
+            var maxIdx = BLANK
+            for (d in 0 until D) {
+                if (logits[offset + d] > maxVal) {
+                    maxVal = logits[offset + d]
+                    maxIdx = d
+                }
+            }
+            // CTC collapse
+            if (maxIdx != BLANK && maxIdx != lastId) {
+                result.add(maxIdx to maxVal)
+            }
+            lastId = maxIdx
+        }
+        return result
+    }
 
-        for (id in ids) {
+    /**
+     * Decodes CTC output to final text string.
+     * Each token ID is looked up in the dictionary.
+     * <SP> → ' ', others → chars[id]
+     */
+    fun ctcDecodeToText(decoded: List<Pair<Int, Float>>): String {
+        val charsList = _chars ?: error("OcrDictionary not loaded.")
+        val sb = StringBuilder(decoded.size)
+        for ((id, _) in decoded) {
             when (id) {
-                PAD, START, SEP, UNK -> continue
-                END -> break
+                BLANK, START, END, SEP, UNK -> continue
                 SPACE -> sb.append(' ')
                 in charsList.indices -> sb.append(charsList[id])
             }
         }
         return sb.toString()
+    }
+
+    /**
+     * Extract average text color from CTC colors output.
+     * Colors shape: [T, 6] = [fr, fg, fb, br, bg, bb]
+     * Returns averaged (fr,fg,fb, br,bg,bb) for the kept characters.
+     */
+    fun extractColors(colors: FloatArray, T: Int, decodedSteps: List<Int>): Pair<IntArray, IntArray> {
+        val n = decodedSteps.size
+        if (n == 0) return IntArray(3) { 0 } to IntArray(3) { 255 }
+
+        var sumFr = 0f; var sumFg = 0f; var sumFb = 0f
+        var sumBr = 0f; var sumBg = 0f; var sumBb = 0f
+
+        for (t in decodedSteps) {
+            val o = t * 6
+            sumFr += colors[o];   sumFg += colors[o + 1]; sumFb += colors[o + 2]
+            sumBr += colors[o + 3]; sumBg += colors[o + 4]; sumBb += colors[o + 5]
+        }
+
+        fun clamp(v: Float) = (v * 255).toInt().coerceIn(0, 255)
+        return intArrayOf(clamp(sumFr / n), clamp(sumFg / n), clamp(sumFb / n)) to
+               intArrayOf(clamp(sumBr / n), clamp(sumBg / n), clamp(sumBb / n))
     }
 }

@@ -101,7 +101,7 @@ fun SettingsDebugScreen(
                 }
                 OutlinedButton(
                     onClick = {
-                        Toast.makeText(context, "Persisted logs cannot be cleared", Toast.LENGTH_SHORT).show()
+                        viewModel.clearLogs()
                     }
                 ) {
                     Text("Clear")
