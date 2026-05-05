@@ -61,6 +61,8 @@ class HistoryViewModel(
             id = id,
             title = imagePath.substringAfterLast("/").substringBeforeLast("."),
             coverImageUri = coverImageUri,
+            imagePath = imagePath,
+            resultImagePath = resultImagePath,
             sourceLanguage = sourceLanguage,
             targetLanguage = targetLanguage,
             translatedAt = translatedAt,

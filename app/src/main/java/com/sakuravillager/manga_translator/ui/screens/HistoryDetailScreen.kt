@@ -85,8 +85,14 @@ fun HistoryDetailScreen(
             ) {
                 val currentHistory = history
                 if (currentHistory != null) {
+                    val imageUri = when (viewState) {
+                        com.sakuravillager.manga_translator.data.model.ViewState.SOURCE ->
+                            currentHistory.imagePath
+                        com.sakuravillager.manga_translator.data.model.ViewState.TRANSLATED ->
+                            currentHistory.resultImagePath ?: currentHistory.coverImageUri
+                    }
                     AsyncImage(
-                        model = currentHistory.coverImageUri,
+                        model = imageUri,
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize()
