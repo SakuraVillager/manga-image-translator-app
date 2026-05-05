@@ -76,17 +76,7 @@ class TranslationPipeline(
 
             // Step 5: Translation
             _progress.value = TranslationProgress.Processing("Translating...", 0.5f)
-            val texts = ctx.textRegions.map { it.text }
-            val translations = translator.translate(
-                texts, "auto", config.translator.targetLanguage, config.translator
-            )
-            ctx.textRegions = ctx.textRegions.zip(translations) { region, translation ->
-                region.copy(translation = translation)
-            }.toMutableList()
-
-            // Apply post-dictionary and validation
-            ctx.textRegions = applyPostDictionary(ctx.textRegions, config).toMutableList()
-            ctx.textRegions = filterInvalidTranslations(ctx.textRegions, config.translator.targetLanguage).toMutableList()
+            ctx.textRegions = translateWithValidationRetry(ctx.textRegions, config)
 
             // Step 6: Mask refinement
             _progress.value = TranslationProgress.Processing("Refining mask...", 0.6f)
@@ -150,7 +140,13 @@ class TranslationPipeline(
 
     private fun filterInvalidTranslations(regions: List<TextBlock>, targetLanguage: String): List<TextBlock> {
         return regions.map { region ->
-            val isValid = TranslationValidator.validate(region.text, region.translation, targetLanguage)
+            val isValid = TranslationValidator.validate(
+                original = region.text,
+                translation = region.translation,
+                targetLang = targetLanguage,
+                repetitionThreshold = 20,
+                targetLangThreshold = 0.5f,
+            )
             if (isValid) {
                 region
             } else {
@@ -159,5 +155,57 @@ class TranslationPipeline(
                 region.copy(translation = region.text)
             }
         }
+    }
+
+    private suspend fun translateWithValidationRetry(
+        regions: List<TextBlock>,
+        config: TranslationConfig,
+    ): MutableList<TextBlock> {
+        if (regions.isEmpty()) return mutableListOf()
+
+        val originalTexts = regions.map { it.text }
+        var candidateTranslations = originalTexts
+
+        repeat((if (config.enablePostTranslationCheck) config.postCheckMaxRetryAttempts else 0) + 1) { attempt ->
+            candidateTranslations = translator.translate(
+                originalTexts,
+                "auto",
+                config.translator.targetLanguage,
+                config.translator,
+            )
+
+            val translatedRegions = regions.zip(candidateTranslations) { region, translation ->
+                region.copy(translation = translation)
+            }
+            val postDictRegions = applyPostDictionary(translatedRegions, config)
+            val validatedRegions = if (config.enablePostTranslationCheck) {
+                postDictRegions.map { region ->
+                    val isValid = TranslationValidator.validate(
+                        original = region.text,
+                        translation = region.translation,
+                        targetLang = config.translator.targetLanguage,
+                        repetitionThreshold = config.postCheckRepetitionThreshold,
+                        targetLangThreshold = config.postCheckTargetLangThreshold,
+                    )
+                    if (isValid) {
+                        region
+                    } else {
+                        region.copy(translation = region.text)
+                    }
+                }
+            } else {
+                postDictRegions
+            }
+
+            val allValid = validatedRegions.all { region ->
+                region.translation.isNotBlank() && region.translation != region.text || region.text.isBlank()
+            }
+
+            if (allValid || attempt == config.postCheckMaxRetryAttempts || !config.enablePostTranslationCheck) {
+                return validatedRegions.toMutableList()
+            }
+        }
+
+        return regions.map { region -> region.copy(translation = region.text) }.toMutableList()
     }
 }

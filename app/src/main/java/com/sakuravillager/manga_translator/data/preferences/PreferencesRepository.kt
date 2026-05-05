@@ -28,6 +28,10 @@ class PreferencesRepository(
                 apiKey = preferences[PreferencesKeys.API_KEY],
                 apiBase = preferences[PreferencesKeys.API_BASE],
                 modelName = preferences[PreferencesKeys.MODEL_NAME],
+                baiduAppId = preferences[PreferencesKeys.BAIDU_APP_ID],
+                baiduSecretKey = preferences[PreferencesKeys.BAIDU_SECRET_KEY],
+                youdaoAppKey = preferences[PreferencesKeys.YOUDAO_APP_KEY],
+                youdaoAppSecret = preferences[PreferencesKeys.YOUDAO_APP_SECRET],
                 targetLanguage = preferences[PreferencesKeys.TARGET_LANGUAGE] ?: AppPreferences.DEFAULT_TARGET_LANGUAGE,
                 modelCtdUrl = preferences[PreferencesKeys.MODEL_CTD_URL],
                 modelOcrUrl = preferences[PreferencesKeys.MODEL_OCR_URL],
@@ -90,6 +94,30 @@ class PreferencesRepository(
         }
     }
 
+    suspend fun updateBaiduAppId(appId: String) {
+        dataStore.edit { preferences ->
+            preferences[PreferencesKeys.BAIDU_APP_ID] = appId
+        }
+    }
+
+    suspend fun updateBaiduSecretKey(secretKey: String) {
+        dataStore.edit { preferences ->
+            preferences[PreferencesKeys.BAIDU_SECRET_KEY] = secretKey
+        }
+    }
+
+    suspend fun updateYoudaoAppKey(appKey: String) {
+        dataStore.edit { preferences ->
+            preferences[PreferencesKeys.YOUDAO_APP_KEY] = appKey
+        }
+    }
+
+    suspend fun updateYoudaoAppSecret(appSecret: String) {
+        dataStore.edit { preferences ->
+            preferences[PreferencesKeys.YOUDAO_APP_SECRET] = appSecret
+        }
+    }
+
     suspend fun updateTargetLanguage(targetLanguage: String) {
         dataStore.edit { preferences ->
             preferences[PreferencesKeys.TARGET_LANGUAGE] = targetLanguage
@@ -145,6 +173,10 @@ class PreferencesRepository(
         val API_KEY = stringPreferencesKey("api_key")
         val API_BASE = stringPreferencesKey("api_base")
         val MODEL_NAME = stringPreferencesKey("model_name")
+        val BAIDU_APP_ID = stringPreferencesKey("baidu_app_id")
+        val BAIDU_SECRET_KEY = stringPreferencesKey("baidu_secret_key")
+        val YOUDAO_APP_KEY = stringPreferencesKey("youdao_app_key")
+        val YOUDAO_APP_SECRET = stringPreferencesKey("youdao_app_secret")
         val TARGET_LANGUAGE = stringPreferencesKey("target_language")
         val MODEL_CTD_URL = stringPreferencesKey("model_ctd_url")
         val MODEL_OCR_URL = stringPreferencesKey("model_ocr_url")

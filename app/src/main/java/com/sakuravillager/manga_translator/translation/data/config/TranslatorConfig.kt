@@ -7,4 +7,5 @@ data class TranslatorConfig(
     val apiKey: String? = null,
     val apiBase: String? = null,
     val model: String? = null,
+    val translatorChain: String? = null,
 )

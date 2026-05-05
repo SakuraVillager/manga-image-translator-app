@@ -14,6 +14,10 @@ data class AppPreferences(
     val apiKey: String? = null,
     val apiBase: String? = null,
     val modelName: String? = null,
+    val baiduAppId: String? = null,
+    val baiduSecretKey: String? = null,
+    val youdaoAppKey: String? = null,
+    val youdaoAppSecret: String? = null,
     val targetLanguage: String = DEFAULT_TARGET_LANGUAGE,
     // Model URL overrides (advanced settings)
     val modelCtdUrl: String? = null,

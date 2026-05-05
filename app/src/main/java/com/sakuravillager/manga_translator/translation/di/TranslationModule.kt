@@ -31,8 +31,10 @@ import com.sakuravillager.manga_translator.translation.stub.NoOpTextlineMerger
 import com.sakuravillager.manga_translator.translation.data.config.TranslatorType
 import com.sakuravillager.manga_translator.translation.stub.NoOpTranslator
 import com.sakuravillager.manga_translator.translation.stub.OriginalTranslator
+import com.sakuravillager.manga_translator.translation.translator.CompositeTranslator
 import com.sakuravillager.manga_translator.translation.translator.DeeplTranslator
 import com.sakuravillager.manga_translator.translation.translator.GptTranslator
+import com.sakuravillager.manga_translator.translation.translator.TranslatorStep
 import com.sakuravillager.manga_translator.data.preferences.PreferencesProvider
 import com.sakuravillager.manga_translator.translation.config.TranslationConfigMapper
 import io.ktor.client.*
@@ -41,6 +43,7 @@ import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
+import android.content.Context
 import org.koin.android.ext.koin.androidContext
 import org.koin.dsl.module
 
@@ -61,10 +64,7 @@ val translationModule = module {
     // TextRecognizer — CTC model loaded from assets, no ONNX session needed
     single<TextRecognizer> {
         val config: TranslationConfig = get()
-        when (config.ocr.ocrEngine) {
-            OcrEngineType.MODEL_48PX -> Model48pxTextRecognizer(androidContext())
-            else -> NoOpTextRecognizer()
-        }
+        buildTextRecognizer(config, androidContext())
     }
 
     // TextlineMerger — always DefaultTextlineMerger (pure algorithm, no model dependency)
@@ -73,14 +73,7 @@ val translationModule = module {
     // Translator — conditional injection based on TranslatorType
     single<Translator> {
         val config: TranslationConfig = get()
-        when (config.translator.translator) {
-            TranslatorType.GPT_COMPATIBLE -> GptTranslator(get())
-            TranslatorType.DEEPL -> DeeplTranslator(get())
-            TranslatorType.NONE -> NoOpTranslator()
-            TranslatorType.ORIGINAL -> OriginalTranslator()
-            // BAIDU, YOUDAO — keep NoOp stubs for now
-            else -> NoOpTranslator()
-        }
+        buildTranslator(config, get())
     }
 
     // Ktor HttpClient (for GPT translator and future API integrations)
@@ -128,5 +121,64 @@ val translationModule = module {
             renderer = get<TextRenderer>(),
             config = get<TranslationConfig>(),
         )
+    }
+}
+
+private fun buildTranslator(config: TranslationConfig, httpClient: HttpClient): Translator {
+    val chain = parseTranslatorChain(config, httpClient)
+    if (chain.isNotEmpty()) {
+        return CompositeTranslator(chain)
+    }
+
+    return createTranslator(config.translator.translator, httpClient)
+}
+
+private fun parseTranslatorChain(
+    config: TranslationConfig,
+    httpClient: HttpClient,
+): List<TranslatorStep> {
+    val chainSpec = config.translator.translatorChain?.trim().orEmpty()
+    if (chainSpec.isEmpty()) return emptyList()
+
+    return chainSpec.split(';')
+        .mapNotNull { item ->
+            val token = item.trim()
+            if (token.isEmpty()) return@mapNotNull null
+
+            val parts = token.split(':', limit = 2)
+            val translatorName = parts.getOrNull(0)?.trim().orEmpty()
+            val targetLanguage = parts.getOrNull(1)?.trim().takeUnless { it.isNullOrEmpty() }
+                ?: config.translator.targetLanguage
+            val translatorType = runCatching { TranslatorType.valueOf(translatorName.uppercase()) }
+                .getOrNull() ?: return@mapNotNull null
+
+            TranslatorStep(
+                translator = createTranslator(translatorType, httpClient),
+                targetLanguage = targetLanguage,
+            )
+        }
+}
+
+private fun createTranslator(
+    translatorType: TranslatorType,
+    httpClient: HttpClient,
+): Translator {
+    return when (translatorType) {
+        TranslatorType.GPT_COMPATIBLE -> GptTranslator(httpClient)
+        TranslatorType.DEEPL -> DeeplTranslator(httpClient)
+        TranslatorType.NONE -> NoOpTranslator()
+        TranslatorType.ORIGINAL -> OriginalTranslator()
+        // BAIDU, YOUDAO — keep NoOp stubs for now
+        else -> NoOpTranslator()
+    }
+}
+
+private fun buildTextRecognizer(config: TranslationConfig, context: Context): TextRecognizer {
+    return when (config.ocr.ocrEngine) {
+        OcrEngineType.MODEL_48PX,
+        OcrEngineType.MODEL_48PX_CTC,
+        OcrEngineType.MODEL_32PX,
+        OcrEngineType.MOCR,
+            -> Model48pxTextRecognizer(context)
     }
 }

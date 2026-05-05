@@ -143,10 +143,43 @@ fun AnimatedNavHost(
             LaunchedEffect(Unit) {
                 AppLogger.d("Navigation", "Navigated to SettingsTranslation")
             }
-            SettingsTranslationScreen(onBack = { navController.popBackStack() })
+            SettingsTranslationScreen(
+                onBack = { navController.popBackStack() },
+                onNavigateToTranslatorConfig = {
+                    navController.navigate(AppRoutes.TranslatorConfig.route)
+                }
+            )
         }
 
-        // 9. Settings Debug
+        // 9. Translator Config
+        composable(AppRoutes.TranslatorConfig.route) {
+            LaunchedEffect(Unit) {
+                AppLogger.d("Navigation", "Navigated to TranslatorConfig")
+            }
+            TranslatorConfigScreen(
+                onBack = { navController.popBackStack() },
+                onPlatformClick = { platform ->
+                    navController.navigate(AppRoutes.translatorPlatformDetailRoute(platform))
+                }
+            )
+        }
+
+        // 10. Translator Platform Detail
+        composable(
+            route = AppRoutes.TranslatorPlatformDetail.route + "/{platform}",
+            arguments = listOf(navArgument("platform") { type = NavType.StringType })
+        ) { backStackEntry ->
+            val platform = backStackEntry.arguments?.getString("platform").orEmpty()
+            LaunchedEffect(Unit) {
+                AppLogger.d("Navigation", "Navigated to TranslatorPlatformDetail: platform=$platform")
+            }
+            TranslatorPlatformDetailScreen(
+                platform = platform,
+                onBack = { navController.popBackStack() }
+            )
+        }
+
+        // 11. Settings Debug
         composable(AppRoutes.SettingsDebug.route) {
             LaunchedEffect(Unit) {
                 AppLogger.d("Navigation", "Navigated to SettingsDebug")
@@ -154,7 +187,7 @@ fun AnimatedNavHost(
             SettingsDebugScreen(onBack = { navController.popBackStack() })
         }
 
-        // 10. Settings About
+        // 12. Settings About
         composable(AppRoutes.SettingsAbout.route) {
             LaunchedEffect(Unit) {
                 AppLogger.d("Navigation", "Navigated to SettingsAbout")

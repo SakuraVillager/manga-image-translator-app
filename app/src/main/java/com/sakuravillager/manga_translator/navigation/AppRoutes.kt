@@ -20,10 +20,16 @@ sealed class AppRoutes(
     data object Settings : AppRoutes("settings", "Settings", Icons.Default.Settings)
     data object SettingsAppearance : AppRoutes("settings_appearance")
     data object SettingsTranslation : AppRoutes("settings_translation")
+    data object TranslatorConfig : AppRoutes("translator_config")
+    data object TranslatorPlatformDetail : AppRoutes("translator_platform_detail")
     data object SettingsDebug : AppRoutes("settings_debug")
     data object SettingsAbout : AppRoutes("settings_about")
 
     companion object {
         val bottomNavItems = listOf(Home, History, SelectPhoto, Settings)
+
+        fun translatorPlatformDetailRoute(platform: String): String {
+            return "${TranslatorPlatformDetail.route}/$platform"
+        }
     }
 }

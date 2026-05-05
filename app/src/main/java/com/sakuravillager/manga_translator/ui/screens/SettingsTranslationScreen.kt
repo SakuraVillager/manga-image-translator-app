@@ -9,10 +9,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Link
-import androidx.compose.material.icons.filled.TextFields
 import androidx.compose.material.icons.filled.Translate
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
@@ -38,16 +36,13 @@ import kotlinx.coroutines.launch
 
 @Composable
 fun SettingsTranslationScreen(
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onNavigateToTranslatorConfig: () -> Unit
 ) {
     val preferences by PreferencesProvider.repository.getPreferences().collectAsState(initial = AppPreferences())
     val repository = PreferencesProvider.repository
     val scope = rememberCoroutineScope()
 
-    var showTranslatorDialog by remember { mutableStateOf(false) }
-    var showTextDirectionDialog by remember { mutableStateOf(false) }
-    var showDetectorDialog by remember { mutableStateOf(false) }
-    var showOcrDialog by remember { mutableStateOf(false) }
     var showInpainterDialog by remember { mutableStateOf(false) }
     var showCtdUrlDialog by remember { mutableStateOf(false) }
     var showOcrUrlDialog by remember { mutableStateOf(false) }
@@ -56,35 +51,6 @@ fun SettingsTranslationScreen(
     var ocrUrl by remember(preferences.modelOcrUrl) { mutableStateOf(preferences.modelOcrUrl ?: "") }
     var alphaUrl by remember(preferences.modelAlphabetUrl) { mutableStateOf(preferences.modelAlphabetUrl ?: "") }
 
-    // Display name mappings for user-friendly subtitles
-    val translatorNames = mapOf(
-        "gpt_compatible" to "GPT-4 Vision",
-        "deepl" to "DeepL",
-        "baidu" to "Baidu",
-        "youdao" to "Youdao",
-        "none" to "None",
-        "original" to "Original"
-    )
-    val textDirectionNames = mapOf(
-        "auto" to "Auto Detect",
-        "horizontal" to "Horizontal (LTR)",
-        "vertical" to "Vertical",
-        "horizontal_rtl" to "Horizontal (RTL)"
-    )
-    val detectorNames = mapOf(
-        "ctd" to "CTD",
-        "default" to "Default",
-        "dbconvnext" to "DBConvNext",
-        "craft" to "CRAFT",
-        "paddle" to "Paddle",
-        "none" to "None"
-    )
-    val ocrNames = mapOf(
-        "model_48px" to "Model 48px",
-        "model_32px" to "Model 32px",
-        "model_48px_ctc" to "Model 48px CTC",
-        "mocr" to "MOCR"
-    )
     val inpainterNames = mapOf(
         "lama_large" to "Lama Large",
         "lama_mpe" to "Lama MPE",
@@ -110,30 +76,9 @@ fun SettingsTranslationScreen(
         ) {
             SettingsListItem(
                 icon = Icons.Default.Translate,
-                title = "Translator",
-                subtitle = translatorNames[preferences.translatorType] ?: preferences.translatorType,
-                onClick = { showTranslatorDialog = true }
-            )
-
-            SettingsListItem(
-                icon = Icons.Default.TextFields,
-                title = "Text Direction",
-                subtitle = textDirectionNames[preferences.textDirection] ?: preferences.textDirection,
-                onClick = { showTextDirectionDialog = true }
-            )
-
-            SettingsListItem(
-                icon = Icons.Default.DocumentScanner,
-                title = "Text Detector",
-                subtitle = detectorNames[preferences.detectorType] ?: preferences.detectorType,
-                onClick = { showDetectorDialog = true }
-            )
-
-            SettingsListItem(
-                icon = Icons.Default.DocumentScanner,
-                title = "OCR Engine",
-                subtitle = ocrNames[preferences.ocrEngineType] ?: preferences.ocrEngineType,
-                onClick = { showOcrDialog = true }
+                title = "Translator Config",
+                subtitle = "GPT-4 Vision, DeepL, Baidu, Youdao",
+                onClick = onNavigateToTranslatorConfig
             )
 
             SettingsListItem(
@@ -174,60 +119,6 @@ fun SettingsTranslationScreen(
 
         Spacer(Modifier.height(32.dp))
         }
-    }
-
-    // --- Dialogs ---
-
-    if (showTranslatorDialog) {
-        SettingsOptionDialog(
-            title = "Select Translator",
-            options = translatorNames.entries.map { it.value to it.key },
-            currentValue = preferences.translatorType,
-            onOptionSelected = { value ->
-                scope.launch { repository.updateTranslatorType(value) }
-                showTranslatorDialog = false
-            },
-            onDismiss = { showTranslatorDialog = false }
-        )
-    }
-
-    if (showTextDirectionDialog) {
-        SettingsOptionDialog(
-            title = "Select Text Direction",
-            options = textDirectionNames.entries.map { it.value to it.key },
-            currentValue = preferences.textDirection,
-            onOptionSelected = { value ->
-                scope.launch { repository.updateTextDirection(value) }
-                showTextDirectionDialog = false
-            },
-            onDismiss = { showTextDirectionDialog = false }
-        )
-    }
-
-    if (showDetectorDialog) {
-        SettingsOptionDialog(
-            title = "Select Text Detector",
-            options = detectorNames.entries.map { it.value to it.key },
-            currentValue = preferences.detectorType,
-            onOptionSelected = { value ->
-                scope.launch { repository.updateDetectorType(value) }
-                showDetectorDialog = false
-            },
-            onDismiss = { showDetectorDialog = false }
-        )
-    }
-
-    if (showOcrDialog) {
-        SettingsOptionDialog(
-            title = "Select OCR Engine",
-            options = ocrNames.entries.map { it.value to it.key },
-            currentValue = preferences.ocrEngineType,
-            onOptionSelected = { value ->
-                scope.launch { repository.updateOcrEngineType(value) }
-                showOcrDialog = false
-            },
-            onDismiss = { showOcrDialog = false }
-        )
     }
 
     if (showInpainterDialog) {

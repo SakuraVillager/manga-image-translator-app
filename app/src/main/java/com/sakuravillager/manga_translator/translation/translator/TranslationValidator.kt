@@ -46,7 +46,13 @@ object TranslationValidator {
      * Comprehensive validation of translation quality.
      * Returns true if the translation is valid, false if it should be discarded.
      */
-    fun validate(original: String, translation: String, targetLang: String): Boolean {
+    fun validate(
+        original: String,
+        translation: String,
+        targetLang: String,
+        repetitionThreshold: Int = 20,
+        targetLangThreshold: Float = 0.5f,
+    ): Boolean {
         // Skip language ratio check when target is auto
         val effectiveTargetLang = if (targetLang.lowercase() == "auto") "skip" else targetLang
 
@@ -63,7 +69,7 @@ object TranslationValidator {
         }
 
         // Repetition detection
-        if (hasRepetition(translation)) {
+        if (hasRepetition(translation, repetitionThreshold)) {
             Log.w(TAG, "Validation failed: repetition detected in translation")
             return false
         }
@@ -76,7 +82,7 @@ object TranslationValidator {
         }
 
         // Target language ratio check
-        if (!isTargetLanguageRatio(translation, effectiveTargetLang)) {
+        if (!isTargetLanguageRatio(translation, effectiveTargetLang, targetLangThreshold)) {
             Log.w(TAG, "Validation failed: insufficient target language content")
             return false
         }
