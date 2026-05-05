@@ -12,6 +12,7 @@ import com.sakuravillager.manga_translator.translation.api.Translator
 import com.sakuravillager.manga_translator.translation.data.TextBlock
 import com.sakuravillager.manga_translator.translation.data.TranslationContext
 import com.sakuravillager.manga_translator.translation.data.config.TranslationConfig
+import com.sakuravillager.manga_translator.translation.util.downsampleToMaxSize
 import com.sakuravillager.manga_translator.translation.dict.DictionaryLoader
 import com.sakuravillager.manga_translator.translation.translator.TranslationValidator
 import kotlinx.coroutines.CancellationException
@@ -35,7 +36,15 @@ class TranslationPipeline(
     suspend fun translate(inputBitmap: Bitmap): TranslationResult {
         val ctx = TranslationContext(inputBitmap = inputBitmap, config = config)
         return try {
-            // Step 0: Prepare
+            // Step 0: Downsample large images to prevent OOM
+            val processingBitmap = if (maxOf(inputBitmap.width, inputBitmap.height) > config.detector.detectionSize) {
+                downsampleToMaxSize(inputBitmap, config.detector.detectionSize)
+            } else {
+                inputBitmap
+            }
+            ctx.originalBitmap = if (processingBitmap !== inputBitmap) inputBitmap else null
+
+            // Step 1: Prepare
             _progress.value = TranslationProgress.Loading("Preparing models...")
             detector.prepare()
             recognizer.prepare()
@@ -45,27 +54,27 @@ class TranslationPipeline(
             inpainter.prepare()
             renderer.prepare()
 
-            // Step 1: Detection
+            // Step 2: Detection
             _progress.value = TranslationProgress.Processing("Detecting text...", 0.1f)
-            val detectionResult = detector.detect(inputBitmap, config.detector)
+            val detectionResult = detector.detect(processingBitmap, config.detector)
             ctx.textlines = detectionResult.textlines.toMutableList()
             ctx.rawMask = detectionResult.rawMask
-            if (ctx.textlines.isEmpty()) return TranslationResult.NoText(inputBitmap)
+            if (ctx.textlines.isEmpty()) return TranslationResult.NoText(processingBitmap)
 
-            // Step 2: OCR
+            // Step 3: OCR
             _progress.value = TranslationProgress.Processing("Recognizing text...", 0.25f)
-            ctx.textlines = recognizer.recognize(inputBitmap, ctx.textlines, config.ocr).toMutableList()
-            if (ctx.textlines.all { it.text.isBlank() }) return TranslationResult.NoText(inputBitmap)
+            ctx.textlines = recognizer.recognize(processingBitmap, ctx.textlines, config.ocr).toMutableList()
+            if (ctx.textlines.all { it.text.isBlank() }) return TranslationResult.NoText(processingBitmap)
 
-            // Step 3: Textline merge
+            // Step 4: Textline merge
             _progress.value = TranslationProgress.Processing("Merging text lines...", 0.35f)
-            ctx.textRegions = merger.merge(ctx.textlines, inputBitmap.width, inputBitmap.height).toMutableList()
-            if (ctx.textRegions.isEmpty()) return TranslationResult.NoText(inputBitmap)
+            ctx.textRegions = merger.merge(ctx.textlines, processingBitmap.width, processingBitmap.height).toMutableList()
+            if (ctx.textRegions.isEmpty()) return TranslationResult.NoText(processingBitmap)
 
             // Apply pre-dictionary (text replacement before translation)
             ctx.textRegions = applyPreDictionary(ctx.textRegions, config).toMutableList()
 
-            // Step 4: Translation
+            // Step 5: Translation
             _progress.value = TranslationProgress.Processing("Translating...", 0.5f)
             val texts = ctx.textRegions.map { it.text }
             val translations = translator.translate(
@@ -79,24 +88,24 @@ class TranslationPipeline(
             ctx.textRegions = applyPostDictionary(ctx.textRegions, config).toMutableList()
             ctx.textRegions = filterInvalidTranslations(ctx.textRegions, config.translator.targetLanguage).toMutableList()
 
-            // Step 5: Mask refinement
+            // Step 6: Mask refinement
             _progress.value = TranslationProgress.Processing("Refining mask...", 0.6f)
             ctx.refinedMask = maskRefiner.refine(
-                ctx.textRegions, inputBitmap, ctx.rawMask,
+                ctx.textRegions, processingBitmap, ctx.rawMask,
                 config.kernelSize, config.maskDilationOffset
             )
 
-            // Step 6: Inpainting
+            // Step 7: Inpainting
             _progress.value = TranslationProgress.Processing("Inpainting...", 0.7f)
-            ctx.imgInpainted = inpainter.inpaint(inputBitmap, ctx.refinedMask!!, config.inpainter)
+            ctx.imgInpainted = inpainter.inpaint(processingBitmap, ctx.refinedMask!!, config.inpainter)
 
-            // Step 7: Rendering
+            // Step 8: Rendering
             _progress.value = TranslationProgress.Processing("Rendering text...", 0.85f)
             val safeInpainted = ctx.imgInpainted?.copy(Bitmap.Config.ARGB_8888, false) ?: ctx.imgInpainted
             ctx.imgRendered = renderer.render(safeInpainted!!, ctx.textRegions, config.renderer)
 
-            // Step 8: Finalize
-            val result = ctx.imgRendered ?: inputBitmap
+            // Step 9: Finalize
+            val result = ctx.imgRendered ?: processingBitmap
             _progress.value = TranslationProgress.Done(result)
             TranslationResult.Success(result, ctx.textRegions)
 

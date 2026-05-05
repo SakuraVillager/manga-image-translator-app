@@ -1,6 +1,7 @@
 package com.sakuravillager.manga_translator.translation.model
 
 import android.content.Context
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -30,6 +31,19 @@ class ModelDownloadManager(
     private val _downloadStatus = MutableStateFlow<DownloadStatus>(DownloadStatus.Idle)
     val downloadStatus: StateFlow<DownloadStatus> = _downloadStatus.asStateFlow()
 
+    @Volatile
+    private var currentDownloadConnection: HttpURLConnection? = null
+
+    @Volatile
+    private var isDownloadCancelled = false
+
+    fun cancelDownload() {
+        isDownloadCancelled = true
+        currentDownloadConnection?.disconnect()
+        currentDownloadConnection = null
+        _downloadStatus.value = DownloadStatus.Idle
+    }
+
     init {
         modelsDir.mkdirs()
     }
@@ -37,8 +51,11 @@ class ModelDownloadManager(
     /**
      * Returns the model file. If the file exists and its SHA-256 matches, returns it.
      * Otherwise downloads the model, verifies integrity, and returns the file.
+     *
+     * @param modelInfo   model descriptor with default URL and SHA-256
+     * @param overrideUrl if non-null, overrides [ModelInfo.url] (e.g. from settings)
      */
-    suspend fun ensureModel(modelInfo: ModelInfo): File = withContext(Dispatchers.IO) {
+    suspend fun ensureModel(modelInfo: ModelInfo, overrideUrl: String? = null): File = withContext(Dispatchers.IO) {
         val file = getModelFile(modelInfo.name)
 
         // Check if a valid file already exists
@@ -52,8 +69,8 @@ class ModelDownloadManager(
             file.delete()
         }
 
-        // Download the model
-        downloadModel(modelInfo)
+        // Download the model (use override URL if provided)
+        downloadModel(modelInfo, overrideUrl)
 
         file
     }
@@ -122,33 +139,33 @@ class ModelDownloadManager(
     /**
      * Downloads a model from its URL to a `.part` file, verifies the SHA-256,
      * then renames the `.part` to the final name.
+     *
+     * @param modelInfo   model descriptor with default URL and SHA-256
+     * @param overrideUrl if non-null, overrides [ModelInfo.url] (e.g. from settings)
      */
-    private fun downloadModel(modelInfo: ModelInfo) {
+    private fun downloadModel(modelInfo: ModelInfo, overrideUrl: String? = null) {
         val partFile = getPartFile(modelInfo.name)
         val finalFile = getModelFile(modelInfo.name)
+        val downloadUrl = overrideUrl ?: modelInfo.url
+        isDownloadCancelled = false
 
-        // Determine how many bytes we already have (for resume support)
         val existingBytes = if (partFile.exists()) partFile.length() else 0L
-
         _downloadStatus.value = DownloadStatus.Downloading(0f)
 
-        val url = URL(modelInfo.url)
+        val url = URL(downloadUrl)
         val connection = url.openConnection() as HttpURLConnection
+        currentDownloadConnection = connection
         try {
             connection.connectTimeout = 30_000
             connection.readTimeout = 30_000
 
-            // Request resume from existing byte offset if applicable
             if (existingBytes > 0L) {
                 connection.setRequestProperty("Range", "bytes=$existingBytes-")
             }
-
             connection.connect()
 
             val responseCode = connection.responseCode
             val isResume = responseCode == HttpURLConnection.HTTP_PARTIAL
-
-            // If the server did not accept the range request, start fresh
             val actualExistingBytes: Long
             if (!isResume && existingBytes > 0L) {
                 partFile.delete()
@@ -157,8 +174,6 @@ class ModelDownloadManager(
                 actualExistingBytes = existingBytes
             }
 
-            // Total file size for progress calculation
-            // For a 206 response, contentLength is the remaining bytes
             val contentLength = connection.contentLengthLong
             val totalBytes = if (isResume && contentLength > 0) {
                 actualExistingBytes + contentLength
@@ -171,21 +186,18 @@ class ModelDownloadManager(
                     val buffer = ByteArray(8192)
                     var bytesRead: Int
                     var totalRead = actualExistingBytes
-
                     while (input.read(buffer).also { bytesRead = it } != -1) {
                         output.write(buffer, 0, bytesRead)
                         totalRead += bytesRead
                         if (totalBytes > 0) {
-                            val progress = totalRead.toFloat() / totalBytes.toFloat()
                             _downloadStatus.value = DownloadStatus.Downloading(
-                                progress.coerceIn(0f, 1f)
+                                (totalRead.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
                             )
                         }
                     }
                 }
             }
 
-            // Verify SHA-256
             _downloadStatus.value = DownloadStatus.Verifying
             val actualHash = computeSha256(partFile)
             if (!actualHash.equals(modelInfo.sha256, ignoreCase = true)) {
@@ -195,29 +207,23 @@ class ModelDownloadManager(
                 throw IOException(msg)
             }
 
-            // Rename .part to final
             if (!partFile.renameTo(finalFile)) {
-                // renameTo can fail on some devices; fall back to copy + delete
-                finalFile.outputStream().use { out ->
-                    partFile.inputStream().use { inp ->
-                        inp.copyTo(out)
-                    }
-                }
+                finalFile.outputStream().use { out -> partFile.inputStream().use { inp -> inp.copyTo(out) } }
                 partFile.delete()
             }
-
             _downloadStatus.value = DownloadStatus.Ready
 
         } catch (e: Exception) {
-            if (e is IOException && e.message?.startsWith("SHA-256 mismatch") == true) {
-                // Already handled above — rethrow
-                throw e
+            if (isDownloadCancelled) {
+                throw CancellationException("Download cancelled by user")
             }
-            _downloadStatus.value = DownloadStatus.Error(
-                e.message ?: "Unknown error downloading ${modelInfo.name}"
-            )
+            if (e is IOException && e.message?.startsWith("SHA-256 mismatch") == true) throw e
+            _downloadStatus.value = DownloadStatus.Error(e.message ?: "Unknown error downloading ${modelInfo.name}")
             throw e
         } finally {
+            if (currentDownloadConnection === connection) {
+                currentDownloadConnection = null
+            }
             connection.disconnect()
         }
     }

@@ -67,3 +67,27 @@ fun letterbox(bitmap: Bitmap, targetSize: Int, stride: Int = 64): LetterboxResul
 fun resizeBitmap(bitmap: Bitmap, width: Int, height: Int): Bitmap {
     return Bitmap.createScaledBitmap(bitmap, width, height, true)
 }
+
+/**
+ * Downsamples [bitmap] so that its longest side does not exceed [maxSize],
+ * preserving aspect ratio. If both dimensions are already within [maxSize],
+ * the original bitmap is returned unchanged.
+ *
+ * This is used at pipeline entry to prevent OOM and speed up processing
+ * when the input image is very large (e.g., > 2048px on any side).
+ *
+ * @param bitmap  The source bitmap to downsample.
+ * @param maxSize The maximum allowed pixel size for the longest dimension.
+ * @return The downsampled bitmap, or the original if already within limits.
+ */
+fun downsampleToMaxSize(bitmap: Bitmap, maxSize: Int): Bitmap {
+    val width = bitmap.width
+    val height = bitmap.height
+    val maxDimension = maxOf(width, height)
+    if (maxDimension <= maxSize) return bitmap
+
+    val scale = maxSize.toFloat() / maxDimension
+    val newWidth = (width * scale).toInt().coerceAtLeast(1)
+    val newHeight = (height * scale).toInt().coerceAtLeast(1)
+    return Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
+}

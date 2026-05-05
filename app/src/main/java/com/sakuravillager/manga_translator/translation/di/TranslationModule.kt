@@ -8,6 +8,7 @@ import com.sakuravillager.manga_translator.translation.api.TextRenderer
 import com.sakuravillager.manga_translator.translation.api.TextlineMerger
 import com.sakuravillager.manga_translator.translation.api.Translator
 import com.sakuravillager.manga_translator.translation.data.config.DetectorType
+import com.sakuravillager.manga_translator.translation.data.config.InpainterType
 import com.sakuravillager.manga_translator.translation.data.config.OcrEngineType
 import com.sakuravillager.manga_translator.translation.data.config.TranslationConfig
 import com.sakuravillager.manga_translator.translation.detection.CtdTextDetector
@@ -17,6 +18,7 @@ import com.sakuravillager.manga_translator.translation.ocr.Model48pxTextRecogniz
 import com.sakuravillager.manga_translator.translation.ocr.OcrDictionary
 import com.sakuravillager.manga_translator.translation.onnx.OnnxSessionManager
 import com.sakuravillager.manga_translator.translation.pipeline.TranslationPipeline
+import com.sakuravillager.manga_translator.translation.inpaint.AotInpainter
 import com.sakuravillager.manga_translator.translation.inpaint.SimpleFillInpainter
 import com.sakuravillager.manga_translator.translation.mask.OpenCVMaskRefiner
 import com.sakuravillager.manga_translator.translation.render.HorizontalTextRenderer
@@ -29,6 +31,7 @@ import com.sakuravillager.manga_translator.translation.stub.NoOpTextlineMerger
 import com.sakuravillager.manga_translator.translation.data.config.TranslatorType
 import com.sakuravillager.manga_translator.translation.stub.NoOpTranslator
 import com.sakuravillager.manga_translator.translation.stub.OriginalTranslator
+import com.sakuravillager.manga_translator.translation.translator.DeeplTranslator
 import com.sakuravillager.manga_translator.translation.translator.GptTranslator
 import com.sakuravillager.manga_translator.data.preferences.PreferencesProvider
 import com.sakuravillager.manga_translator.translation.config.TranslationConfigMapper
@@ -72,9 +75,10 @@ val translationModule = module {
         val config: TranslationConfig = get()
         when (config.translator.translator) {
             TranslatorType.GPT_COMPATIBLE -> GptTranslator(get())
+            TranslatorType.DEEPL -> DeeplTranslator(get())
             TranslatorType.NONE -> NoOpTranslator()
             TranslatorType.ORIGINAL -> OriginalTranslator()
-            // DEEPL, BAIDU, YOUDAO — keep NoOp stubs for now
+            // BAIDU, YOUDAO — keep NoOp stubs for now
             else -> NoOpTranslator()
         }
     }
@@ -93,7 +97,15 @@ val translationModule = module {
 
     // Real implementations replacing NoOp stubs
     factory<MaskRefiner> { OpenCVMaskRefiner() }
-    factory<Inpainter> { SimpleFillInpainter() }
+    factory<Inpainter> {
+        val config: TranslationConfig = get()
+        when (config.inpainter.inpainter) {
+            InpainterType.AOT, InpainterType.LAMA_LARGE, InpainterType.LAMA_MPE ->
+                AotInpainter(get(), get(), androidContext())
+            InpainterType.SIMPLE_FILL -> SimpleFillInpainter()
+            else -> SimpleFillInpainter()
+        }
+    }
     factory<TextRenderer> { HorizontalTextRenderer(androidContext(), get()) }
 
     // TranslationConfig — factory reading from DataStore via PreferencesProvider

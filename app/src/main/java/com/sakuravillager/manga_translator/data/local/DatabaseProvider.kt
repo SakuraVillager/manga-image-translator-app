@@ -15,7 +15,7 @@ object DatabaseProvider {
                 context.applicationContext,
                 AppDatabase::class.java,
                 "manga_translator_database"
-            ).build().also {
+            ).addMigrations(AppDatabase.MIGRATION_1_2).build().also {
                 database = it
                 dao = it.translationHistoryDao()
                 AppLogger.i("Database", "Database initialized")

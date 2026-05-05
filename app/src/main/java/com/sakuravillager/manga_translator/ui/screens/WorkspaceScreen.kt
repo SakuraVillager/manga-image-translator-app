@@ -66,7 +66,8 @@ fun WorkspaceScreen(
             @Suppress("UNCHECKED_CAST")
             override fun <T : ViewModel> create(modelClass: Class<T>): T {
                 val pipeline = KoinJavaComponent.get<TranslationPipeline>(TranslationPipeline::class.java)
-                return WorkspaceViewModel(pipeline) as T
+                val appContext = KoinJavaComponent.get<android.content.Context>(android.content.Context::class.java)
+                return WorkspaceViewModel(pipeline, appContext) as T
             }
         }
     )
@@ -172,6 +173,29 @@ fun WorkspaceScreen(
 
             // Progress & Cancel area
             when (val progress = uiState.progress) {
+                is TranslationProgress.Downloading -> {
+                    Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+                        LinearProgressIndicator(
+                            progress = { progress.progress },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "${(progress.progress * 100).toInt()}% - ${progress.message}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            TextButton(onClick = { viewModel.cancelTranslation() }) {
+                                Text("Cancel Download", color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
+                }
                 is TranslationProgress.Loading -> {
                     Column(modifier = Modifier.padding(horizontal = 16.dp)) {
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
@@ -220,7 +244,17 @@ fun WorkspaceScreen(
                         )
                     }
                 }
-                else -> { /* Idle — 不显示任何内容 */ }
+                is TranslationProgress.Error -> {
+                    Column(modifier = Modifier.padding(horizontal = 16.dp)) {
+                        Text(
+                            text = "Model download failed",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+                    }
+                }
+                is TranslationProgress.Idle -> { /* 不显示任何内容 */ }
             }
 
             // No text detected warning

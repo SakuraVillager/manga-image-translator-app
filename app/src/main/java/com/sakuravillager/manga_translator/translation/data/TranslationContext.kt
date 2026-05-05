@@ -6,6 +6,7 @@ import com.sakuravillager.manga_translator.translation.data.config.TranslationCo
 data class TranslationContext(
     val inputBitmap: Bitmap,
     val config: TranslationConfig,
+    var originalBitmap: Bitmap? = null,  // Store original for final output comparison
     var imgRgb: Bitmap? = null,
     var textlines: MutableList<Quadrilateral> = mutableListOf(),
     var rawMask: Bitmap? = null,
