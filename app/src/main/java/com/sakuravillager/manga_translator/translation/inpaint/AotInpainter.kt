@@ -1,7 +1,6 @@
 package com.sakuravillager.manga_translator.translation.inpaint
 
 import ai.onnxruntime.OnnxTensor
-import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import android.content.Context
 import android.graphics.Bitmap
@@ -41,7 +40,6 @@ class AotInpainter(
     override val isReady: Boolean get() = _isReady
 
     private var session: OrtSession? = null
-    private val env: OrtEnvironment = OrtEnvironment.getEnvironment()
 
     companion object {
         private const val TAG = "AotInpainter"
@@ -138,7 +136,7 @@ class AotInpainter(
 
             val shape = longArrayOf(1L, 4L, procH.toLong(), procW.toLong())
             val inputTensor = OnnxTensor.createTensor(
-                env, FloatBuffer.wrap(floatArray), shape,
+                sessionManager.environment, FloatBuffer.wrap(floatArray), shape,
             )
 
             try {

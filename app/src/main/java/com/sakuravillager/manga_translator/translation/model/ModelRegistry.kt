@@ -47,32 +47,21 @@ object ModelRegistry {
     )
 
     /**
-     * AOT-GAN inpainting model.
+     * AOT-GAN inpainting model (ONNX).
      *
-     * NOTE: This entry records the original PyTorch checkpoint URL and SHA-256
-     * from the upstream project. The ONNX model (`aot_inpainting.onnx`) needs
-     * to be exported from the checkpoint before it can be used on Android.
+     * Exported from the PyTorch checkpoint using [export_onnx.py].
+     * The ONNX file must be uploaded to the GitHub release and placed at the
+     * path below. If the file is not available at the URL, place the ONNX file
+     * manually at `{filesDir}/models/aot_inpainting` (see ModelDownloadManager).
      *
-     * Export command (Python):
-     *   python -c "
-     *   from aot import AOTGenerator
-     *   import torch
-     *   model = AOTGenerator(4, 3)
-     *   ckpt = torch.load('inpainting.ckpt', map_location='cpu')
-     *   model.load_state_dict(ckpt)
-     *   model.eval()
-     *   dummy = torch.randn(1, 4, 256, 256)
-     *   torch.onnx.export(model, dummy, 'aot_inpainting.onnx',
-     *                     input_names=['input'], output_names=['output'],
-     *                     dynamic_axes={'input': {2: 'H', 3: 'W'},
-     *                                   'output': {2: 'H', 3: 'W'}})
-     *   "
+     * Architecture: AOTGenerator(4, 3) — 4 input channels (mask+R/G/B),
+     * 3 output channels (R/G/B). Input normalized to [-1, 1].
      */
     val AOT_INPAINTING_MODEL = ModelInfo(
         name = "aot_inpainting",
-        url = "https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/inpainting.ckpt",
-        sha256 = "878d541c68648969bc1b042a6e997f3a58e49b6c07c5636ad55130736977149f",
-        sizeBytes = 50_000_000L,
+        url = "https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/aot_inpainting.onnx",
+        sha256 = "8d9af65348c17b7749c32c4fad62a4dc6b3fe267bf1ad64fb4f41062a49da848",
+        sizeBytes = 1_295_885L,
     )
 
     val allModels: List<ModelInfo> = listOf(CTD_MODEL, OCR_48PX_MODEL, ALPHABET_FILE, CJK_FONT, AOT_INPAINTING_MODEL)

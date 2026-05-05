@@ -7,7 +7,7 @@ import kotlinx.coroutines.withContext
 
 object OnnxSessionManager {
 
-    private val env: OrtEnvironment = OrtEnvironment.getEnvironment()
+    val environment: OrtEnvironment = OrtEnvironment.getEnvironment()
 
     private val sessions = mutableListOf<OrtSession>()
 
@@ -16,7 +16,7 @@ object OnnxSessionManager {
         options: OrtSession.SessionOptions? = null,
     ): OrtSession = withContext(Dispatchers.Default) {
         val opts = options ?: createDefaultSessionOptions()
-        val session = env.createSession(modelBytes, opts)
+        val session = environment.createSession(modelBytes, opts)
         addSession(session)
         session
     }
