@@ -1,5 +1,7 @@
 package com.sakuravillager.manga_translator.translation.data
 
+import com.sakuravillager.manga_translator.translation.data.config.ColorizerConfig
+import com.sakuravillager.manga_translator.translation.data.config.ColorizerType
 import com.sakuravillager.manga_translator.translation.data.config.DetectorConfig
 import com.sakuravillager.manga_translator.translation.data.config.DetectorType
 import com.sakuravillager.manga_translator.translation.data.config.InpainterConfig
@@ -11,6 +13,8 @@ import com.sakuravillager.manga_translator.translation.data.config.RendererType
 import com.sakuravillager.manga_translator.translation.data.config.TranslationConfig
 import com.sakuravillager.manga_translator.translation.data.config.TranslatorConfig
 import com.sakuravillager.manga_translator.translation.data.config.TranslatorType
+import com.sakuravillager.manga_translator.translation.data.config.UpscaleConfig
+import com.sakuravillager.manga_translator.translation.data.config.UpscalerType
 import org.junit.Test
 import org.junit.Assert.*
 
@@ -30,6 +34,8 @@ class TranslationConfigTest {
         assertEquals(DetectorConfig(), config.detector)
         assertEquals(OcrConfig(), config.ocr)
         assertEquals(TranslatorConfig(), config.translator)
+        assertEquals(ColorizerConfig(), config.colorizer)
+        assertEquals(UpscaleConfig(), config.upscale)
         assertEquals(InpainterConfig(), config.inpainter)
         assertEquals(RendererConfig(), config.renderer)
         assertEquals(3, config.kernelSize)
@@ -37,7 +43,13 @@ class TranslationConfigTest {
         assertNull(config.filterText)
         assertNull(config.preDictPath)
         assertNull(config.postDictPath)
+        assertTrue(config.enablePostTranslationCheck)
+        assertEquals(3, config.postCheckMaxRetryAttempts)
+        assertEquals(20, config.postCheckRepetitionThreshold)
+        assertEquals(0.5f, config.postCheckTargetLangThreshold, 0f)
+        assertFalse(config.ignoreErrors)
         assertFalse(config.forceSimpleSort)
+        assertFalse(config.verbose)
     }
 
     @Test
@@ -45,11 +57,17 @@ class TranslationConfigTest {
         val config = TranslationConfig(
             kernelSize = 5,
             maskDilationOffset = 10,
-            filterText = ".*test.*"
+            filterText = ".*test.*",
+            forceSimpleSort = true,
+            verbose = true,
+            ignoreErrors = true,
         )
         assertEquals(5, config.kernelSize)
         assertEquals(10, config.maskDilationOffset)
         assertEquals(".*test.*", config.filterText)
+        assertTrue(config.forceSimpleSort)
+        assertTrue(config.verbose)
+        assertTrue(config.ignoreErrors)
     }
 
     // ── DetectorConfig ─────────────────────────────────────────────
@@ -126,6 +144,8 @@ class TranslationConfigTest {
         assertNotNull(config.detector)
         assertNotNull(config.ocr)
         assertNotNull(config.translator)
+        assertNotNull(config.colorizer)
+        assertNotNull(config.upscale)
         assertNotNull(config.inpainter)
         assertNotNull(config.renderer)
     }
@@ -245,6 +265,60 @@ class TranslationConfigTest {
             RendererType.MANGA2ENG,
             RendererType.NONE
         )
+    }
+
+    // ── ColorizerType enum ──────────────────────────────────────────
+
+    @Test
+    fun colorizerTypeEnumHasThreeValues() {
+        assertEquals(3, ColorizerType.values().size)
+    }
+
+    @Test
+    fun colorizerTypeEnumContainsAllExpectedValues() {
+        assertContainsAll(
+            ColorizerType.values(),
+            ColorizerType.NONE,
+            ColorizerType.BASIC,
+            ColorizerType.MC2,
+        )
+    }
+
+    // ── UpscalerType enum ──────────────────────────────────────────
+
+    @Test
+    fun upscalerTypeEnumHasThreeValues() {
+        assertEquals(3, UpscalerType.values().size)
+    }
+
+    @Test
+    fun upscalerTypeEnumContainsAllExpectedValues() {
+        assertContainsAll(
+            UpscalerType.values(),
+            UpscalerType.NONE,
+            UpscalerType.BASIC,
+            UpscalerType.ESRGAN,
+        )
+    }
+
+    // ── ColorizerConfig ─────────────────────────────────────────────
+
+    @Test
+    fun colorizerConfigDefaultValues() {
+        val config = ColorizerConfig()
+        assertEquals(ColorizerType.NONE, config.colorizer)
+        assertEquals(576, config.colorizationSize)
+        assertEquals(30, config.denoiseSigma)
+    }
+
+    // ── UpscaleConfig ───────────────────────────────────────────────
+
+    @Test
+    fun upscaleConfigDefaultValues() {
+        val config = UpscaleConfig()
+        assertEquals(UpscalerType.BASIC, config.upscaler)
+        assertNull(config.upscaleRatio)
+        assertFalse(config.revertUpscaling)
     }
 
     // ── Shared helper ──────────────────────────────────────────────

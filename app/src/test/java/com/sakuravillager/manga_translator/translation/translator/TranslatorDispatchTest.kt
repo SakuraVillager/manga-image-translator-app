@@ -363,6 +363,42 @@ class TranslatorDispatchTest {
         assertTrue("Expected NoOpTranslator fallback", translator is NoOpTranslator)
     }
 
+    @Test
+    fun `createTranslator falls back to NoOpTranslator for NLLB_BIG`() {
+        val translator = createTranslator(TranslatorType.NLLB_BIG)
+        assertTrue("Expected NoOpTranslator fallback", translator is NoOpTranslator)
+    }
+
+    @Test
+    fun `createTranslator falls back to NoOpTranslator for M2M100_BIG`() {
+        val translator = createTranslator(TranslatorType.M2M100_BIG)
+        assertTrue("Expected NoOpTranslator fallback", translator is NoOpTranslator)
+    }
+
+    @Test
+    fun `createTranslator falls back to NoOpTranslator for MBART50`() {
+        val translator = createTranslator(TranslatorType.MBART50)
+        assertTrue("Expected NoOpTranslator fallback", translator is NoOpTranslator)
+    }
+
+    @Test
+    fun `createTranslator falls back to NoOpTranslator for QWEN2_BIG`() {
+        val translator = createTranslator(TranslatorType.QWEN2_BIG)
+        assertTrue("Expected NoOpTranslator fallback", translator is NoOpTranslator)
+    }
+
+    @Test
+    fun `createTranslator falls back to NoOpTranslator for JPARACRAWL`() {
+        val translator = createTranslator(TranslatorType.JPARACRAWL)
+        assertTrue("Expected NoOpTranslator fallback", translator is NoOpTranslator)
+    }
+
+    @Test
+    fun `createTranslator falls back to NoOpTranslator for JPARACRAWL_BIG`() {
+        val translator = createTranslator(TranslatorType.JPARACRAWL_BIG)
+        assertTrue("Expected NoOpTranslator fallback", translator is NoOpTranslator)
+    }
+
     // ─── parseChain with new types ───────────────────────────────────
 
     @Test
