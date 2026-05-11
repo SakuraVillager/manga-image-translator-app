@@ -17,17 +17,22 @@ object DictionaryLoader {
         val lines = File(path).readLines()
 
         lines.forEachIndexed { index, rawLine ->
-            val line = rawLine.trim()
-            // Skip empty lines and comments
-            if (line.isEmpty() || line.startsWith("#") || line.startsWith("//")) return@forEachIndexed
-
             val lineNumber = index + 1 // 1-based line numbers
+            val stripped = rawLine.trim()
+            // Skip empty lines and comments
+            if (stripped.isEmpty() || stripped.startsWith("#") || stripped.startsWith("//")) return@forEachIndexed
 
-            // Split into pattern and optional replacement
-            val spaceIndex = line.indexOf(' ')
-            if (spaceIndex > 0) {
-                val pattern = line.substring(0, spaceIndex)
-                val replacement = line.substring(spaceIndex + 1).trim()
+            val line = stripped
+                .replace(Regex("\\s+#.*$"), "")
+                .replace(Regex("\\s+//.*$"), "")
+                .trim()
+
+            if (line.isEmpty()) return@forEachIndexed
+
+            val parts = line.split(Regex("\\s+"), limit = 2)
+            if (parts.size == 2) {
+                val pattern = parts[0]
+                val replacement = parts[1]
                 entries.add(DictEntry(Regex(pattern), replacement, lineNumber))
                 Log.d(TAG, "Loaded rule #$lineNumber: /$pattern/ -> '$replacement'")
             } else {
@@ -47,7 +52,7 @@ object DictionaryLoader {
             val before = result
             result = entry.pattern.replace(result, entry.replacement)
             if (result != before) {
-                Log.d(TAG, "Applied rule #${entry.lineNumber}: '$before' -> '$result'")
+                Log.i(TAG, "Line ${entry.lineNumber}: Replaced \"$before\" with \"$result\" using pattern \"${entry.pattern.pattern}\"")
             }
         }
         return result

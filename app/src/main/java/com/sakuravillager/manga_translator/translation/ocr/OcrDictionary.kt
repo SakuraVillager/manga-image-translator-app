@@ -78,16 +78,17 @@ object OcrDictionary {
     /**
      * Decodes CTC output to final text string.
      * Each token ID is looked up in the dictionary.
-     * <SP> → ' ', others → chars[id]
+     * Match the Python reference: only blank is removed during CTC collapse;
+     * dictionary entries are otherwise preserved, except <SP> → ' '.
      */
     fun ctcDecodeToText(decoded: List<Pair<Int, Float>>): String {
         val charsList = _chars ?: error("OcrDictionary not loaded.")
         val sb = StringBuilder(decoded.size)
         for ((id, _) in decoded) {
-            when (id) {
-                BLANK, START, END, SEP, UNK -> continue
-                SPACE -> sb.append(' ')
-                in charsList.indices -> sb.append(charsList[id])
+            if (id !in charsList.indices) continue
+            when (charsList[id]) {
+                "<SP>" -> sb.append(' ')
+                else -> sb.append(charsList[id])
             }
         }
         return sb.toString()

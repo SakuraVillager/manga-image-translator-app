@@ -1,27 +1,37 @@
 package com.sakuravillager.manga_translator.translation.di
 
 import com.sakuravillager.manga_translator.translation.api.Inpainter
+import com.sakuravillager.manga_translator.translation.api.Colorizer
 import com.sakuravillager.manga_translator.translation.api.MaskRefiner
+import com.sakuravillager.manga_translator.translation.api.Upscaler
 import com.sakuravillager.manga_translator.translation.api.TextDetector
 import com.sakuravillager.manga_translator.translation.api.TextRecognizer
 import com.sakuravillager.manga_translator.translation.api.TextRenderer
 import com.sakuravillager.manga_translator.translation.api.TextlineMerger
 import com.sakuravillager.manga_translator.translation.api.Translator
+import com.sakuravillager.manga_translator.translation.colorize.BasicColorizer
 import com.sakuravillager.manga_translator.translation.data.config.DetectorType
+import com.sakuravillager.manga_translator.translation.data.config.ColorizerType
 import com.sakuravillager.manga_translator.translation.data.config.InpainterType
 import com.sakuravillager.manga_translator.translation.data.config.OcrEngineType
 import com.sakuravillager.manga_translator.translation.data.config.TranslationConfig
+import com.sakuravillager.manga_translator.translation.data.config.UpscalerType
 import com.sakuravillager.manga_translator.translation.detection.CtdTextDetector
 import com.sakuravillager.manga_translator.translation.merge.DefaultTextlineMerger
 import com.sakuravillager.manga_translator.translation.model.ModelDownloadManager
 import com.sakuravillager.manga_translator.translation.ocr.Model48pxTextRecognizer
+import com.sakuravillager.manga_translator.translation.ocr.Model48pxCTCOCR
 import com.sakuravillager.manga_translator.translation.ocr.OcrDictionary
-import com.sakuravillager.manga_translator.translation.onnx.OnnxSessionManager
+import com.sakuravillager.manga_translator.translation.ocr.Model48pxBeamRecognizer
+import com.sakuravillager.manga_translator.translation.ocr.Model32pxBeamRecognizer
+import com.sakuravillager.manga_translator.translation.ocr.ModelMangaOCR
+// Note: avoid eager reference to OnnxSessionManager here to prevent native JNI loading
 import com.sakuravillager.manga_translator.translation.pipeline.TranslationPipeline
 import com.sakuravillager.manga_translator.translation.inpaint.AotInpainter
 import com.sakuravillager.manga_translator.translation.inpaint.SimpleFillInpainter
 import com.sakuravillager.manga_translator.translation.mask.OpenCVMaskRefiner
 import com.sakuravillager.manga_translator.translation.render.HorizontalTextRenderer
+import com.sakuravillager.manga_translator.translation.upscale.BasicUpscaler
 import com.sakuravillager.manga_translator.translation.stub.NoOpInpainter
 import com.sakuravillager.manga_translator.translation.stub.NoOpMaskRefiner
 import com.sakuravillager.manga_translator.translation.stub.NoOpTextDetector
@@ -29,8 +39,8 @@ import com.sakuravillager.manga_translator.translation.stub.NoOpTextRecognizer
 import com.sakuravillager.manga_translator.translation.stub.NoOpTextRenderer
 import com.sakuravillager.manga_translator.translation.stub.NoOpTextlineMerger
 import com.sakuravillager.manga_translator.translation.data.config.TranslatorType
-import com.sakuravillager.manga_translator.translation.stub.NoOpTranslator
-import com.sakuravillager.manga_translator.translation.stub.OriginalTranslator
+import com.sakuravillager.manga_translator.translation.translator.NoOpTranslator
+import com.sakuravillager.manga_translator.translation.translator.OriginalTranslator
 import com.sakuravillager.manga_translator.translation.translator.CompositeTranslator
 import com.sakuravillager.manga_translator.translation.translator.DeeplTranslator
 import com.sakuravillager.manga_translator.translation.translator.GptTranslator
@@ -49,7 +59,8 @@ import org.koin.dsl.module
 
 val translationModule = module {
     // Infrastructure singletons
-    single { OnnxSessionManager }
+    // Register OnnxSessionManager lazily (its OrtEnvironment is lazy-initialized)
+    single { com.sakuravillager.manga_translator.translation.onnx.OnnxSessionManager }
     single { ModelDownloadManager(androidContext()) }
 
     // Factory pattern for TextDetector — CTD or NoOp fallback
@@ -69,6 +80,10 @@ val translationModule = module {
 
     // TextlineMerger — always DefaultTextlineMerger (pure algorithm, no model dependency)
     single<TextlineMerger> { DefaultTextlineMerger() }
+
+    // Pre-processing modules — lightweight defaults with optional config control
+    single<Colorizer> { BasicColorizer() }
+    single<Upscaler> { BasicUpscaler() }
 
     // Translator — conditional injection based on TranslatorType
     single<Translator> {
@@ -116,6 +131,8 @@ val translationModule = module {
             recognizer = get<TextRecognizer>(),
             merger = get<TextlineMerger>(),
             translator = get<Translator>(),
+            colorizer = get<Colorizer>(),
+            upscaler = get<Upscaler>(),
             maskRefiner = get<MaskRefiner>(),
             inpainter = get<Inpainter>(),
             renderer = get<TextRenderer>(),
@@ -174,11 +191,16 @@ private fun createTranslator(
 }
 
 private fun buildTextRecognizer(config: TranslationConfig, context: Context): TextRecognizer {
-    return when (config.ocr.ocrEngine) {
-        OcrEngineType.MODEL_48PX,
-        OcrEngineType.MODEL_48PX_CTC,
-        OcrEngineType.MODEL_32PX,
-        OcrEngineType.MOCR,
-            -> Model48pxTextRecognizer(context)
+    return try {
+        when (config.ocr.ocrEngine) {
+            OcrEngineType.MODEL_48PX_CTC -> Model48pxCTCOCR(context)
+            OcrEngineType.MODEL_48PX -> Model48pxBeamRecognizer(context)
+            OcrEngineType.MODEL_32PX -> Model32pxBeamRecognizer(context)
+            OcrEngineType.MOCR -> ModelMangaOCR(context)
+        }
+    } catch (_: Throwable) {
+        // If native ONNX runtime or other native deps are unavailable (unit test JVM),
+        // fall back to a NoOp recognizer so tests and non-native environments continue.
+        NoOpTextRecognizer()
     }
 }

@@ -4,6 +4,8 @@ data class TranslationConfig(
     val detector: DetectorConfig = DetectorConfig(),
     val ocr: OcrConfig = OcrConfig(),
     val translator: TranslatorConfig = TranslatorConfig(),
+    val colorizer: ColorizerConfig = ColorizerConfig(),
+    val upscale: UpscaleConfig = UpscaleConfig(),
     val inpainter: InpainterConfig = InpainterConfig(),
     val renderer: RendererConfig = RendererConfig(),
     val kernelSize: Int = 3,
@@ -15,4 +17,5 @@ data class TranslationConfig(
     val postCheckMaxRetryAttempts: Int = 3,
     val postCheckRepetitionThreshold: Int = 20,
     val postCheckTargetLangThreshold: Float = 0.5f,
+    val ignoreErrors: Boolean = false,
 )

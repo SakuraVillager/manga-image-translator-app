@@ -3,6 +3,7 @@ package com.sakuravillager.manga_translator.translation.translator
 import android.util.Log
 import com.sakuravillager.manga_translator.translation.api.Translator
 import com.sakuravillager.manga_translator.translation.data.config.TranslatorConfig
+import com.sakuravillager.manga_translator.translation.translator.common.CommonTranslator
 
 data class TranslatorStep(
     val translator: Translator,
@@ -26,6 +27,12 @@ class CompositeTranslator(
 
     override suspend fun prepare() {
         for (step in steps) {
+            if (step.translator is CommonTranslator) {
+                val common = step.translator as CommonTranslator
+                if (!common.supportsLanguages("auto", step.targetLanguage, fatal = false)) {
+                    Log.w(name, "Language '${step.targetLanguage}' may not be supported by ${step.translator.name}")
+                }
+            }
             if (!step.translator.isReady) {
                 step.translator.prepare()
             }

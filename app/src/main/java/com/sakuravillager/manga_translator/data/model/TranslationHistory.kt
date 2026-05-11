@@ -9,7 +9,8 @@ data class TranslationHistory(
     val sourceLanguage: String,
     val targetLanguage: String,
     val translatedAt: Long,
-    val status: TranslationStatus
+    val status: TranslationStatus,
+    val textRegions: String? = null,
 )
 
 enum class TranslationStatus {

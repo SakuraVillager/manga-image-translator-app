@@ -7,6 +7,8 @@ import androidx.lifecycle.viewModelScope
 import com.sakuravillager.manga_translator.data.local.DatabaseProvider
 import com.sakuravillager.manga_translator.data.local.TranslationHistoryEntity
 import com.sakuravillager.manga_translator.data.logging.AppLogger
+import com.sakuravillager.manga_translator.data.model.PointSnapshot
+import com.sakuravillager.manga_translator.data.model.TextRegionSnapshot
 import com.sakuravillager.manga_translator.data.model.ViewState
 import com.sakuravillager.manga_translator.translation.data.TextBlock
 import com.sakuravillager.manga_translator.translation.model.DownloadStatus
@@ -20,6 +22,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import org.koin.java.KoinJavaComponent
 import java.io.File
 import java.io.FileOutputStream
@@ -27,7 +31,7 @@ import java.io.FileOutputStream
 data class WorkspaceUiState(
     val viewState: ViewState = ViewState.TRANSLATED,
     val imageUris: List<String> = emptyList(),
-    val selectedLanguage: String = "Japanese",
+    val selectedLanguage: String = "JPN",
     val resultBitmap: Bitmap? = null,
     val inputBitmap: Bitmap? = null,
     val progress: TranslationProgress = TranslationProgress.Idle,
@@ -41,6 +45,11 @@ class WorkspaceViewModel(
     private val pipeline: TranslationPipeline,
     private val appContext: Context,
 ) : ViewModel() {
+
+    private val historyJson = Json {
+        encodeDefaults = true
+        ignoreUnknownKeys = true
+    }
 
     private val _uiState = MutableStateFlow(WorkspaceUiState())
     val uiState: StateFlow<WorkspaceUiState> = _uiState.asStateFlow()
@@ -159,6 +168,99 @@ class WorkspaceViewModel(
         }
     }
 
+    /**
+     * Translates multiple images in batch.
+     *
+     * @param bitmaps List of input images to translate.
+     */
+    fun translateBatch(bitmaps: List<Bitmap>) {
+        AppLogger.i(
+            "WorkspaceViewModel",
+            "translateBatch called with ${bitmaps.size} images"
+        )
+
+        translationJob?.cancel()
+        progressJob?.cancel()
+        downloadJob?.cancel()
+
+        _uiState.value = _uiState.value.copy(
+            isTranslating = true,
+            errorMessage = null,
+            noTextDetected = false,
+        )
+
+        translationJob = viewModelScope.launch(Dispatchers.Default) {
+            try {
+                val results = pipeline.translateBatch(bitmaps)
+                AppLogger.i(
+                    "WorkspaceViewModel",
+                    "Batch translation completed: ${results.size} images"
+                )
+
+                val firstResult = results.firstOrNull()
+                when (firstResult) {
+                    is TranslationResult.Success -> {
+                        _uiState.value = _uiState.value.copy(
+                            resultBitmap = firstResult.bitmap,
+                            inputBitmap = bitmaps.firstOrNull(),
+                            errorMessage = null,
+                            noTextDetected = false,
+                            progress = TranslationProgress.Done(firstResult.bitmap),
+                            isTranslating = false,
+                        )
+                        saveTranslation()
+                    }
+                    is TranslationResult.NoText -> {
+                        _uiState.value = _uiState.value.copy(
+                            resultBitmap = null,
+                            errorMessage = null,
+                            noTextDetected = true,
+                            progress = TranslationProgress.Done(firstResult.originalBitmap),
+                            isTranslating = false,
+                        )
+                    }
+                    is TranslationResult.Cancelled -> {
+                        AppLogger.i("WorkspaceViewModel", "Batch translation cancelled")
+                        _uiState.value = _uiState.value.copy(
+                            errorMessage = "翻译已取消",
+                            noTextDetected = false,
+                            isTranslating = false,
+                            progress = TranslationProgress.Idle,
+                        )
+                    }
+                    is TranslationResult.Error -> {
+                        AppLogger.e(
+                            "WorkspaceViewModel",
+                            "Batch translation failed: ${firstResult.message}",
+                            firstResult.exception
+                        )
+                        _uiState.value = _uiState.value.copy(
+                            errorMessage = firstResult.message ?: "Batch translation failed",
+                            noTextDetected = false,
+                            isTranslating = false,
+                            progress = TranslationProgress.Idle,
+                        )
+                    }
+                    null -> {
+                        _uiState.value = _uiState.value.copy(
+                            errorMessage = "Batch returned no results",
+                            noTextDetected = false,
+                            isTranslating = false,
+                            progress = TranslationProgress.Idle,
+                        )
+                    }
+                }
+            } catch (e: Exception) {
+                AppLogger.e("WorkspaceViewModel", "Batch translation failed: ${e.message}", e)
+                _uiState.value = _uiState.value.copy(
+                    errorMessage = e.message ?: "Batch translation failed",
+                    isTranslating = false,
+                    progress = TranslationProgress.Idle,
+                )
+            }
+        }
+    }
+
     fun setViewState(state: ViewState) {
         viewModelScope.launch {
             AppLogger.i("Workspace", "View state changed to ${state.name}")
@@ -241,6 +343,41 @@ class WorkspaceViewModel(
     }
 
     private fun serializeTextRegions(regions: List<TextBlock>): String {
-        return regions.joinToString("||") { "${it.text}|-|${it.translation}" }
+        return historyJson.encodeToString(
+            regions.map { region ->
+                TextRegionSnapshot(
+                    text = region.text,
+                    textRaw = region.textRaw,
+                    translation = region.translation,
+                    language = region.language,
+                    sourceLanguage = region.sourceLanguage,
+                    targetLanguage = region.targetLanguage,
+                    fontSize = region.fontSize,
+                    angle = region.angle,
+                    fontFamily = region.fontFamily,
+                    bold = region.bold,
+                    underline = region.underline,
+                    italic = region.italic,
+                    fgColor = region.fgColor,
+                    bgColor = region.bgColor,
+                    opacity = region.opacity,
+                    lineSpacing = region.lineSpacing,
+                    letterSpacing = region.letterSpacing,
+                    shadowRadius = region.shadowRadius,
+                    shadowStrength = region.shadowStrength,
+                    shadowColor = region.shadowColor,
+                    shadowOffsetX = region.shadowOffsetX,
+                    shadowOffsetY = region.shadowOffsetY,
+                    direction = region.direction.name,
+                    alignment = region.alignment.name,
+                    probability = region.probability,
+                    panelIndex = region.panelIndex,
+                    texts = region.texts,
+                    lines = region.lines.map { line ->
+                        line.map { point -> PointSnapshot(point.x, point.y) }
+                    },
+                )
+            }
+        )
     }
 }

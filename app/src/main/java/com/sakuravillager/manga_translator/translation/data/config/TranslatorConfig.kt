@@ -8,4 +8,6 @@ data class TranslatorConfig(
     val apiBase: String? = null,
     val model: String? = null,
     val translatorChain: String? = null,
+    val contextPages: Int = 0,
+    val prevContext: String? = null,
 )

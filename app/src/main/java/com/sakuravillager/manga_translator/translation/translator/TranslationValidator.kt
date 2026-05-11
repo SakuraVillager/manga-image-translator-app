@@ -1,6 +1,7 @@
 package com.sakuravillager.manga_translator.translation.translator
 
 import android.util.Log
+import com.sakuravillager.manga_translator.translation.translator.common.TextUtils
 
 object TranslationValidator {
     private const val TAG = "TranslationValidator"
@@ -28,6 +29,79 @@ object TranslationValidator {
             }
         }
         return false
+    }
+
+    /**
+     * Checks if the translation has too few unique symbols (hallucination indicator).
+     * Matches Python's _is_translation_invalid() logic.
+     */
+    fun hasLowUniqueSymbolRatio(text: String, querySymbolCount: Int, threshold: Float = 0.25f): Boolean {
+        if (text.length < 6) return false
+        val valuableCount = TextUtils.countValuableText(text)
+        return valuableCount < 6 && valuableCount < threshold * text.length
+    }
+
+    /**
+     * Cleans translation output by applying regex-based post-processing rules.
+     * Matches Python's _clean_translation_output() logic.
+     */
+    fun cleanTranslation(translation: String, query: String = "", targetLang: String = "ENG"): String {
+        return try {
+            var result = translation
+
+            // Rule 1: Collapse multiple whitespace
+            result = Regex("\\s+").replace(result, " ")
+
+            // Rule 2: Add space after punctuation before a word character
+            result = Regex("(?<![.,;!?])([.,;!?])(?=\\w)").replace(result, "$1 ")
+
+            // Rule 3: Remove space between consecutive punctuation
+            result = Regex("([.,;!?])\\s+(?=[.,;!?]|$)").replace(result, "$1")
+
+            if (targetLang != "ARA") {
+                // Rule 4: Remove space before trailing punctuation
+                result = Regex("(?<=[.,;!?\\w])\\s+([.,;!?])").replace(result, "$1")
+
+                // Rule 5: Remove space after ellipsis before a word ('... text' → '...text')
+                result = Regex("((?:\\s|^)\\.+)\\s+(?=\\w)").replace(result, "$1")
+            }
+
+            // Rule 6: Shrink repeating sequences (only when translation is shorter than query)
+            if (query.isNotEmpty() && result.length < query.length) {
+                val seq = findShortestRepeatingUnit(result)
+                if (seq != null && seq.length < 0.5f * result.length) {
+                    val repeatCount = maxOf(1, query.length / seq.length)
+                    val shrunken = seq.repeat(repeatCount)
+                    // Transfer capitalization from query
+                    result = if (query.firstOrNull()?.isUpperCase() == true) {
+                        shrunken.replaceFirstChar { it.uppercase() }
+                    } else {
+                        shrunken
+                    }
+                }
+            }
+
+            result
+        } catch (e: Exception) {
+            // On any error, return original string unchanged
+            translation
+        }
+    }
+
+    /**
+     * Finds the shortest repeating unit in text (e.g., "ab" for "ababab").
+     * Returns null if no repeating unit is found.
+     */
+    private fun findShortestRepeatingUnit(text: String): String? {
+        if (text.isEmpty()) return null
+        for (len in 1..text.length / 2) {
+            if (text.length % len != 0) continue
+            val unit = text.substring(0, len)
+            if (unit.repeat(text.length / len) == text) {
+                return unit
+            }
+        }
+        return null
     }
 
     /**
@@ -71,6 +145,12 @@ object TranslationValidator {
         // Repetition detection
         if (hasRepetition(translation, repetitionThreshold)) {
             Log.w(TAG, "Validation failed: repetition detected in translation")
+            return false
+        }
+
+        // Low unique symbol ratio detection (matches Python's _is_translation_invalid)
+        if (hasLowUniqueSymbolRatio(translation, original.toSet().size)) {
+            Log.w(TAG, "Validation failed: low unique symbol ratio in translation")
             return false
         }
 

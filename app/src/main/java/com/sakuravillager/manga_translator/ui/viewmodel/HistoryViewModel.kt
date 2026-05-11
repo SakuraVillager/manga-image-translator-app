@@ -110,7 +110,8 @@ class HistoryViewModel(
                 TranslationStatus.valueOf(status)
             } catch (e: Exception) {
                 TranslationStatus.PENDING
-            }
+            },
+            textRegions = textRegions,
         )
     }
 }

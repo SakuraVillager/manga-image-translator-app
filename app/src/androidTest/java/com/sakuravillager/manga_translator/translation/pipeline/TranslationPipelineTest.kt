@@ -15,7 +15,7 @@ import com.sakuravillager.manga_translator.translation.data.config.TranslationCo
 import com.sakuravillager.manga_translator.translation.stub.NoOpTextDetector
 import com.sakuravillager.manga_translator.translation.stub.NoOpTextRecognizer
 import com.sakuravillager.manga_translator.translation.stub.NoOpTextlineMerger
-import com.sakuravillager.manga_translator.translation.stub.NoOpTranslator
+import com.sakuravillager.manga_translator.translation.translator.NoOpTranslator
 import com.sakuravillager.manga_translator.translation.stub.NoOpMaskRefiner
 import com.sakuravillager.manga_translator.translation.stub.NoOpInpainter
 import com.sakuravillager.manga_translator.translation.stub.NoOpTextRenderer

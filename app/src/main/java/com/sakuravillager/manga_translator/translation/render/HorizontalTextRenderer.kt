@@ -89,16 +89,10 @@ class HorizontalTextRenderer(
                 maxOf(textSize, 1f)
             }
 
-            // --- Paint setup ---
-            val paint = Paint().apply {
-                this.typeface = this@HorizontalTextRenderer.typeface
-                this.textSize = textSize
-                color = region.fgColor ?: Color.BLACK
-                isAntiAlias = true
-            }
-
-            val fgColor = region.fgColor ?: Color.BLACK
+            val fgColor = config.fontColor?.let { parseColorOrNull(it) } ?: region.fgColor ?: Color.BLACK
             val bgColor = region.bgColor ?: Color.WHITE
+            val paint = buildPaint(region, textSize, fgColor)
+            val effectiveLineSpacing = if (region.lineSpacing > 0f) region.lineSpacing else config.lineSpacing
 
             when (region.direction) {
                 TextDirection.VERTICAL -> {
@@ -106,10 +100,39 @@ class HorizontalTextRenderer(
                     continue
                 }
                 TextDirection.HORIZONTAL_RTL -> {
+                    if (region.translation.contains('\n')) {
+                        renderMultilineHorizontal(
+                            canvas = canvas,
+                            text = region.translation,
+                            rect = rect,
+                            paint = paint,
+                            fgColor = fgColor,
+                            bgColor = bgColor,
+                            disableBorder = config.disableFontBorder,
+                            rtl = true,
+                            lineSpacing = effectiveLineSpacing,
+                        )
+                        continue
+                    }
                     renderHorizontalRtl(canvas, region.translation, rect, paint, fgColor, bgColor, config.disableFontBorder)
                     continue
                 }
                 else -> { /* continue with horizontal rendering */ }
+            }
+
+            if (region.translation.contains('\n')) {
+                renderMultilineHorizontal(
+                    canvas = canvas,
+                    text = region.translation,
+                    rect = rect,
+                    paint = paint,
+                    fgColor = fgColor,
+                    bgColor = bgColor,
+                    disableBorder = config.disableFontBorder,
+                    rtl = false,
+                    lineSpacing = effectiveLineSpacing,
+                )
+                continue
             }
 
             // --- Measure & scale to fit ---
@@ -143,11 +166,12 @@ class HorizontalTextRenderer(
                 paint.style = Paint.Style.STROKE
                 paint.strokeWidth = textSize * 0.05f
                 paint.color = region.bgColor ?: Color.WHITE
+                applyRegionTextStyle(paint, region, fgColor, textSize)
                 canvas.drawText(region.translation, x, y, paint)
             }
             // Second pass: fill (foreground)
             paint.style = Paint.Style.FILL
-            paint.color = region.fgColor ?: Color.BLACK
+            applyRegionTextStyle(paint, region, fgColor, textSize)
             canvas.drawText(region.translation, x, y, paint)
         }
 
@@ -204,6 +228,7 @@ class HorizontalTextRenderer(
                     paint.style = Paint.Style.STROKE
                     paint.strokeWidth = fontSize * 0.05f
                     paint.color = bgColor
+                    paint.alpha = paint.alpha
                     canvas.drawText(char, colX, charY, paint)
                 }
                 // Fill pass (foreground)
@@ -250,5 +275,129 @@ class HorizontalTextRenderer(
         paint.style = Paint.Style.FILL
         paint.color = fgColor
         canvas.drawText(text, rect.right - textWidth, y, paint)
+    }
+
+    private fun renderMultilineHorizontal(
+        canvas: Canvas,
+        text: String,
+        rect: RectF,
+        paint: Paint,
+        fgColor: Int,
+        bgColor: Int,
+        disableBorder: Boolean,
+        rtl: Boolean,
+        lineSpacing: Float?,
+    ) {
+        val lines = text.split('\n').filter { it.isNotBlank() }
+        if (lines.isEmpty()) return
+
+        val spacingFactor = lineSpacing?.takeIf { it > 0f } ?: 0.25f
+        val originalSize = paint.textSize
+
+        fun measureLayoutHeight(size: Float): Float {
+            val lineHeight = size * 1.15f
+            return lines.size * lineHeight + (lines.size - 1) * (size * spacingFactor)
+        }
+
+        val widestLine = lines.maxOfOrNull { paint.measureText(it) } ?: 0f
+        val widthScale = if (widestLine > 0f && rect.width() > 0f) {
+            rect.width() / widestLine
+        } else {
+            1f
+        }
+
+        val heightAtOriginal = measureLayoutHeight(originalSize)
+        val heightScale = if (heightAtOriginal > 0f && rect.height() > 0f) {
+            rect.height() / heightAtOriginal
+        } else {
+            1f
+        }
+
+        val textSize = originalSize * minOf(1f, widthScale, heightScale)
+        paint.textSize = textSize
+
+        val layoutHeight = measureLayoutHeight(textSize)
+        val lineHeight = textSize * 1.15f
+        val gap = textSize * spacingFactor
+        var currentY = rect.centerY() - layoutHeight / 2f + lineHeight * 0.75f
+
+        for (line in lines) {
+            val lineWidth = paint.measureText(line)
+
+            val x = when {
+                rtl -> rect.right - lineWidth
+                else -> rect.left
+            }
+
+            if (!disableBorder) {
+                paint.style = Paint.Style.STROKE
+                paint.strokeWidth = paint.textSize * 0.05f
+                paint.color = bgColor
+                canvas.drawText(line, x, currentY, paint)
+            }
+            paint.style = Paint.Style.FILL
+            paint.color = fgColor
+            canvas.drawText(line, x, currentY, paint)
+
+            currentY += lineHeight + gap
+        }
+    }
+
+    private fun buildPaint(region: TextBlock, textSize: Float, fgColor: Int): Paint {
+        val style = when {
+            region.bold && region.italic -> Typeface.BOLD_ITALIC
+            region.bold -> Typeface.BOLD
+            region.italic -> Typeface.ITALIC
+            else -> Typeface.NORMAL
+        }
+
+        val baseTypeface = when {
+            region.fontFamily.isNotBlank() -> Typeface.create(region.fontFamily, style)
+            else -> this.typeface ?: Typeface.DEFAULT
+        }
+
+        return Paint().apply {
+            typeface = Typeface.create(baseTypeface, style)
+            this.textSize = textSize
+            color = fgColor
+            isAntiAlias = true
+            isUnderlineText = region.underline
+            isFakeBoldText = region.bold
+            textSkewX = if (region.italic && !region.bold) -0.25f else 0f
+            alpha = (region.opacity.coerceIn(0f, 1f) * 255).toInt().coerceIn(0, 255)
+
+            if (region.shadowRadius > 0f) {
+                setShadowLayer(
+                    region.shadowRadius,
+                    region.shadowOffsetX,
+                    region.shadowOffsetY,
+                    region.shadowColor ?: Color.BLACK,
+                )
+            }
+        }
+    }
+
+    private fun applyRegionTextStyle(paint: Paint, region: TextBlock, fgColor: Int, textSize: Float) {
+        paint.color = fgColor
+        paint.alpha = (region.opacity.coerceIn(0f, 1f) * 255).toInt().coerceIn(0, 255)
+        paint.isUnderlineText = region.underline
+        paint.isFakeBoldText = region.bold
+        paint.textSkewX = if (region.italic && !region.bold) -0.25f else 0f
+        paint.strokeWidth = maxOf(textSize * 0.05f, region.shadowStrength)
+
+        if (region.shadowRadius > 0f) {
+            paint.setShadowLayer(
+                region.shadowRadius,
+                region.shadowOffsetX,
+                region.shadowOffsetY,
+                region.shadowColor ?: Color.BLACK,
+            )
+        } else {
+            paint.clearShadowLayer()
+        }
+    }
+
+    private fun parseColorOrNull(color: String): Int? {
+        return runCatching { Color.parseColor(color) }.getOrNull()
     }
 }

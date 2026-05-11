@@ -10,6 +10,8 @@ import com.sakuravillager.manga_translator.translation.api.TextlineMerger
 import com.sakuravillager.manga_translator.translation.api.Translator
 import com.sakuravillager.manga_translator.translation.data.config.DetectorConfig
 import com.sakuravillager.manga_translator.translation.data.config.DetectorType
+import com.sakuravillager.manga_translator.translation.data.config.InpainterConfig
+import com.sakuravillager.manga_translator.translation.data.config.InpainterType
 import com.sakuravillager.manga_translator.translation.data.config.OcrConfig
 import com.sakuravillager.manga_translator.translation.data.config.OcrEngineType
 import com.sakuravillager.manga_translator.translation.data.config.TranslationConfig
@@ -45,6 +47,7 @@ class TranslationModuleTest : KoinTest {
                 TranslationConfig(
                     detector = DetectorConfig(detector = DetectorType.NONE),
                     ocr = OcrConfig(ocrEngine = OcrEngineType.MODEL_32PX),
+                    inpainter = InpainterConfig(inpainter = InpainterType.SIMPLE_FILL),
                 )
             }
         }

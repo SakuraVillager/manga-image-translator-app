@@ -7,7 +7,9 @@ import kotlinx.coroutines.withContext
 
 object OnnxSessionManager {
 
-    val environment: OrtEnvironment = OrtEnvironment.getEnvironment()
+    // Delay loading the native OrtEnvironment until actually needed to avoid
+    // triggering JNI load during JVM unit tests that merely reference this object.
+    val environment: OrtEnvironment by lazy { OrtEnvironment.getEnvironment() }
 
     private val sessions = mutableListOf<OrtSession>()
 

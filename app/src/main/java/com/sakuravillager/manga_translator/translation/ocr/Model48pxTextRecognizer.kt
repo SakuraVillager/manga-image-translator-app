@@ -11,9 +11,13 @@ import com.sakuravillager.manga_translator.translation.api.TextRecognizer
 import com.sakuravillager.manga_translator.translation.data.Quadrilateral
 import com.sakuravillager.manga_translator.translation.data.TextDirection
 import com.sakuravillager.manga_translator.translation.data.config.OcrConfig
+import com.sakuravillager.manga_translator.translation.merge.quadrilateralCanMergeRegion
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
+import java.util.ArrayDeque
+import java.io.File
+import java.io.FileOutputStream
 
 /**
  * CTC-based 48px OCR text recognizer using ONNX Runtime.
@@ -59,6 +63,13 @@ class Model48pxTextRecognizer(
          * low-memory devices while remaining responsive for narrow regions.
          */
         private const val MAX_INPUT_TENSOR_BYTES = 10 * 1024 * 1024L
+
+        fun normalizePixel(px: Int): Triple<Float, Float, Float> {
+            val r = ((px shr 16) and 0xFF) / 127.5f - 1f
+            val g = ((px shr 8) and 0xFF) / 127.5f - 1f
+            val b = (px and 0xFF) / 127.5f - 1f
+            return Triple(r, g, b)
+        }
     }
 
     override suspend fun prepare() {
@@ -66,7 +77,20 @@ class Model48pxTextRecognizer(
         session = env.createSession(modelBytes, OrtSession.SessionOptions())
         OcrDictionary.load(context)
         _isReady = true
+
+        // Log model I/O specs for parity debugging
+        val sess = session!!
         Log.i(TAG, "CTC OCR model loaded (${modelBytes.size / 1024} KB)")
+        Log.i(TAG, "Model input names: ${sess.inputNames}")
+        Log.i(TAG, "Model output names: ${sess.outputNames}")
+        for (name in sess.inputNames) {
+            val info = sess.getInputInfo().getValue(name)
+            Log.i(TAG, "Input '$name' info: $info")
+        }
+        for (name in sess.outputNames) {
+            val info = sess.getOutputInfo().getValue(name)
+            Log.i(TAG, "Output '$name' info: $info")
+        }
     }
 
     override suspend fun release() {
@@ -82,14 +106,44 @@ class Model48pxTextRecognizer(
     ): List<Quadrilateral> {
         if (textlines.isEmpty() || session == null) return textlines
         val sess = session!!
+        Log.d(TAG, "recognize() start: regions=${textlines.size}, engine=${config.ocrEngine}")
 
-        // 1. Extract regions
-        val regions = textlines.map { q ->
-            q.getTransformedRegion(bitmap, TextDirection.AUTO, TEXT_HEIGHT)
+        // 1. Mirror Python's _generate_text_direction(): build components first,
+        // then assign a shared direction per connected component.
+        val grouped = generateTextDirections(textlines)
+
+        // Optional debug directory for saving crop images and token traces.
+        val debugRoot = if (config.debugSaveCrops || config.debugSaveTokens) {
+            File(context.filesDir, "ocr_debug_${System.currentTimeMillis()}")
+        } else null
+        debugRoot?.mkdirs()
+
+        // 2. Extract regions in the same order as the Python OCR model.
+        val regions = grouped.map { (origIdx, quad, direction) ->
+            val cropDirection = when (direction) {
+                TextDirection.VERTICAL -> TextDirection.VERTICAL
+                TextDirection.HORIZONTAL_RTL, TextDirection.HORIZONTAL, TextDirection.AUTO -> TextDirection.HORIZONTAL
+            }
+            val crop = quad.getTransformedRegion(bitmap, cropDirection, TEXT_HEIGHT, debugRoot)
                 ?: Bitmap.createBitmap(1, TEXT_HEIGHT, Bitmap.Config.ARGB_8888)
+            Log.d(TAG, "region#$origIdx: direction=$cropDirection, cropSize=${crop.width}x${crop.height}, quadPoints=${quad.points.size}")
+            crop
         }
 
-        val results = textlines.toMutableList()
+        if (config.debugSaveCrops && debugRoot != null) {
+            for (i in regions.indices) {
+                val origIndex = grouped[i].first
+                val f = File(debugRoot, "region_${origIndex}_w${regions[i].width}.png")
+                try {
+                    FileOutputStream(f).use { out -> regions[i].compress(Bitmap.CompressFormat.PNG, 90, out) }
+                    Log.d(TAG, "Saved debug crop: ${f.absolutePath}")
+                } catch (e: Exception) {
+                    Log.w(TAG, "Failed to save crop: ${e.message}")
+                }
+            }
+        }
+
+        val results = textlines.mapIndexed { index, quad -> quad.copy(sourceIndex = index) }.toMutableList()
 
         // 2. Sort by width (matching Python reference -- all 4 OCR models do this)
         //    so similar-width regions are batched together, maximizing padding efficiency.
@@ -118,7 +172,7 @@ class Model48pxTextRecognizer(
             val batchIndices = sortedIndices.subList(batchStart, batchEnd)
             val N = batchIndices.size
             val widths = batchIndices.map { regions[it].width }
-            val maxW = (4 * ((widths.maxOrNull() ?: 1) + 7) / 4) + 128
+            val maxW = 4 * ((widths.maxOrNull() ?: 1) + 7) / 4
 
             // 2b. Build input tensor: [N, 3, 48, maxW], float32, normalized to [-1, 1]
             val tensorSize = N * 3 * TEXT_HEIGHT * maxW
@@ -141,9 +195,7 @@ class Model48pxTextRecognizer(
                 for (y in 0 until TEXT_HEIGHT) {
                     for (x in 0 until maxW) {
                         val px = pixelBuf[y * maxW + x]
-                        val r = ((px shr 16) and 0xFF) / 127.5f - 1f
-                        val g = ((px shr 8) and 0xFF) / 127.5f - 1f
-                        val b = (px and 0xFF) / 127.5f - 1f
+                        val (r, g, b) = normalizePixel(px)
                         val base = localIdx * 3 * TEXT_HEIGHT * maxW
                         floatBuf.put(base + 0 * TEXT_HEIGHT * maxW + y * maxW + x, r)
                         floatBuf.put(base + 1 * TEXT_HEIGHT * maxW + y * maxW + x, g)
@@ -154,8 +206,11 @@ class Model48pxTextRecognizer(
 
             // 3. Run ONNX inference
             val shape = longArrayOf(N.toLong(), 3L, TEXT_HEIGHT.toLong(), maxW.toLong())
+            Log.d(TAG, "ONNX input shape: N=$N, C=3, H=$TEXT_HEIGHT, W=$maxW")
             OnnxTensor.createTensor(env, floatBuf, shape).use { imgTensor ->
-                val outputs = sess.run(mapOf("img" to imgTensor))
+                val inputName = sess.inputNames.iterator().next()
+                Log.d(TAG, "ONNX input name: '$inputName'")
+                val outputs = sess.run(mapOf(inputName to imgTensor))
                 val logits = outputs.get(0) as OnnxTensor
                 val colors = (outputs.get(1) as OnnxTensor)
 
@@ -165,6 +220,8 @@ class Model48pxTextRecognizer(
                 val D = logits.info.shape[2].toInt()
                 val seqLen = T * D
                 val colLen = T * 6
+                Log.d(TAG, "ONNX output logits shape: [${logits.info.shape[0]}, $T, $D], colors shape: [${colors.info.shape[0]}, ${colors.info.shape[1]}, ${colors.info.shape[2]}]")
+                Log.d(TAG, "Dictionary size: ${OcrDictionary.size}, BLANK=${OcrDictionary.BLANK}")
 
                 // 4. CTC decode per sample -- read from FloatBuffer one timestep at a time.
                 //
@@ -177,6 +234,7 @@ class Model48pxTextRecognizer(
                 for (localIdx in 0 until N) {
                     val decoded = mutableListOf<Pair<Int, Float>>()
                     val keptSteps = mutableListOf<Int>()
+                    val argmaxTrace = StringBuilder() // first 10 timesteps
 
                     // Greedy CTC decode: argmax per timestep
                     var lastId = OcrDictionary.BLANK
@@ -192,6 +250,9 @@ class Model48pxTextRecognizer(
                                 maxIdx = d
                             }
                         }
+                        if (t < 10) {
+                            argmaxTrace.append("t$t=$maxIdx(${String.format("%.2f", maxVal)}) ")
+                        }
                         if (maxIdx != OcrDictionary.BLANK && maxIdx != lastId) {
                             decoded.add(maxIdx to maxVal)
                             keptSteps.add(t)
@@ -199,7 +260,23 @@ class Model48pxTextRecognizer(
                         lastId = maxIdx
                     }
 
+                    val groupedIndex = batchIndices[localIdx]
+                    val originalIndex = grouped[groupedIndex].first
+                    Log.d(TAG, "region#$originalIndex argmax[0..9]: $argmaxTrace, decoded=${decoded.size} tokens")
+
                     val text = OcrDictionary.ctcDecodeToText(decoded)
+
+                    // Save token trace if requested
+                    if (config.debugSaveTokens && debugRoot != null) {
+                        val groupedIndexDebug = batchIndices[localIdx]
+                        val originalIndexDebug = grouped[groupedIndexDebug].first
+                        val tokenFile = File(debugRoot, "region_${originalIndexDebug}_tokens.txt")
+                        try {
+                            tokenFile.writeText(decoded.joinToString("\n") { "${it.first}:${it.second}" })
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to write token file: ${e.message}")
+                        }
+                    }
 
                     // Extract colors from FloatBuffer per kept timestep
                     var sumFr = 0f; var sumFg = 0f; var sumFb = 0f
@@ -217,18 +294,90 @@ class Model48pxTextRecognizer(
                     val bg = if (numKept > 0) intArrayOf(clamp(sumBr / numKept), clamp(sumBg / numKept), clamp(sumBb / numKept))
                              else intArrayOf(255, 255, 255)
 
-                    val qIdx = batchIndices[localIdx]
-                    results[qIdx] = results[qIdx].copy(
+                    results[originalIndex] = results[originalIndex].copy(
                         text = text,
                         fgColor = (0xFF shl 24) or (fg[0] shl 16) or (fg[1] shl 8) or fg[2],
                         bgColor = (0xFF shl 24) or (bg[0] shl 16) or (bg[1] shl 8) or bg[2],
                     )
+                    if (text.isBlank()) {
+                        Log.d(TAG, "region#$originalIndex decoded as blank")
+                    } else {
+                        Log.d(TAG, "region#$originalIndex decoded text='$text'")
+                    }
                 }
                 outputs.close()
             }
             batchStart = batchEnd
         }
 
-        return results.filterNot { it.text.isBlank() }
+        return OcrPostProcessor.refine(results)
     }
+
+    private fun generateTextDirections(textlines: List<Quadrilateral>): List<Triple<Int, Quadrilateral, TextDirection>> {
+        if (textlines.isEmpty()) return emptyList()
+
+        val visited = BooleanArray(textlines.size)
+        val output = mutableListOf<Triple<Int, Quadrilateral, TextDirection>>()
+
+        for (startIndex in textlines.indices) {
+            if (visited[startIndex]) continue
+
+            val component = mutableListOf<Int>()
+            val queue: ArrayDeque<Int> = ArrayDeque()
+            queue.add(startIndex)
+            visited[startIndex] = true
+
+            while (queue.isNotEmpty()) {
+                val current = queue.removeFirst()
+                component.add(current)
+
+                for (otherIndex in textlines.indices) {
+                    if (visited[otherIndex]) continue
+                    if (quadrilateralCanMergeRegion(textlines[current], textlines[otherIndex], aspectRatioTol = 1f)) {
+                        visited[otherIndex] = true
+                        queue.add(otherIndex)
+                    }
+                }
+            }
+
+            val directionCounts = component
+                .map { textlines[it].direction }
+                .filter { it != TextDirection.AUTO }
+                .groupingBy { it }
+                .eachCount()
+
+            val majorityDirection = when {
+                directionCounts.isEmpty() -> {
+                    val horizontalScore = component.count { textlines[it].aspectRatio >= 1f }
+                    val verticalScore = component.size - horizontalScore
+                    if (verticalScore > horizontalScore) TextDirection.VERTICAL else TextDirection.HORIZONTAL
+                }
+                directionCounts.size == 1 -> directionCounts.keys.first()
+                else -> {
+                    val sortedCounts = directionCounts.entries.sortedByDescending { it.value }
+                    if (sortedCounts.size == 1 || sortedCounts[0].value != sortedCounts[1].value) {
+                        sortedCounts.first().key
+                    } else {
+                        val best = component.maxByOrNull {
+                            maxOf(textlines[it].aspectRatio, if (textlines[it].aspectRatio == 0f) 0f else 1f / textlines[it].aspectRatio)
+                        }
+                        best?.let { textlines[it].direction.takeIf { dir -> dir != TextDirection.AUTO } }
+                            ?: sortedCounts.first().key
+                    }
+                }
+            }
+
+            val sortedComponent = when (majorityDirection) {
+                TextDirection.VERTICAL -> component.sortedByDescending { textlines[it].aabb.left + textlines[it].aabb.width() }
+                else -> component.sortedBy { textlines[it].aabb.top + textlines[it].aabb.height() / 2f }
+            }
+
+            for (index in sortedComponent) {
+                output.add(Triple(index, textlines[index], majorityDirection))
+            }
+        }
+
+        return output
+    }
+
 }

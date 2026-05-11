@@ -14,16 +14,28 @@ import org.opencv.core.CvType
 import org.opencv.core.Mat
 import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
+import android.util.Log
+import java.io.File
+import java.io.FileOutputStream
 
 data class Quadrilateral(
     val points: List<PointF>,
     val text: String = "",
     val probability: Float = 0f,
     val direction: TextDirection = TextDirection.AUTO,
+    val sourceIndex: Int? = null,
+    val readingOrderIndex: Int? = null,
     val fgColor: Int? = null,
     val bgColor: Int? = null,
 ) {
-    private fun mid(a: PointF, b: PointF) = PointF((a.x + b.x) / 2f, (a.y + b.y) / 2f)
+    private fun pointF(x: Float, y: Float): PointF {
+        return PointF().apply {
+            this.x = x
+            this.y = y
+        }
+    }
+
+    private fun mid(a: PointF, b: PointF) = pointF((a.x + b.x) / 2f, (a.y + b.y) / 2f)
 
     val structure: List<PointF> get() {
         if (points.size < 4) return emptyList()
@@ -38,7 +50,7 @@ data class Quadrilateral(
         if (points.isEmpty()) return PointF()
         val cx = points.map { it.x }.average().toFloat()
         val cy = points.map { it.y }.average().toFloat()
-        return PointF(cx, cy)
+        return pointF(cx, cy)
     }
 
     val boundingBox: RectF get() {
@@ -82,7 +94,7 @@ data class Quadrilateral(
         val v2y = s[2].y - s[3].y
         val norm1 = sqrt(v1x * v1x + v1y * v1y)
         val norm2 = sqrt(v2x * v2x + v2y * v2y)
-        return if (norm1 == 0f) 0f else norm2 / norm1
+        return if (norm2 == 0f) 0f else norm1 / norm2
     }
 
     val fontSize: Float get() {
@@ -102,8 +114,8 @@ data class Quadrilateral(
         val s = structure
         if (s.size < 4) return false
 
-        val topToBottom = PointF(s[1].x - s[0].x, s[1].y - s[0].y)
-        val rightToLeft = PointF(s[2].x - s[3].x, s[2].y - s[3].y)
+        val topToBottom = pointF(s[1].x - s[0].x, s[1].y - s[0].y)
+        val rightToLeft = pointF(s[2].x - s[3].x, s[2].y - s[3].y)
 
         fun isNearAxis(vec: PointF): Boolean {
             val len = sqrt(vec.x * vec.x + vec.y * vec.y)
@@ -149,77 +161,154 @@ data class Quadrilateral(
         bitmap: Bitmap,
         direction: TextDirection,
         textHeight: Int,
+        debugRoot: File? = null,
     ): Bitmap {
-        if (points.size < 4 || textHeight <= 0) return bitmap
+        if (points.size < 4 || textHeight <= 0) {
+            return Bitmap.createBitmap(textHeight.coerceAtLeast(1), textHeight.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+        }
 
-        val srcPts = sortPoints(points)
-        val w = (aspectRatio * textHeight).toInt().coerceAtLeast(1)
-        val h = textHeight
+        val srcPts = sortPoints(points).map { PointF(it.x, it.y) }.toMutableList()
+        // sortPoints returns [TL, TR, BR, BL] (clockwise).
+        // Python uses [TL, BL, BR, TR] (counter-clockwise starting from top-left).
+        // Reorder to match Python convention for correct midpoint and homography.
+        val s = listOf(srcPts[0], srcPts[3], srcPts[2], srcPts[1]) // [TL, BL, BR, TR]
+        val srcRect = boundingBox
+        val imWidth = bitmap.width
+        val imHeight = bitmap.height
+
+        val x1 = srcRect.left.toInt().coerceIn(0, imWidth)
+        val y1 = srcRect.top.toInt().coerceIn(0, imHeight)
+        val x2 = srcRect.right.toInt().coerceIn(0, imWidth)
+        val y2 = srcRect.bottom.toInt().coerceIn(0, imHeight)
+        if (x2 <= x1 || y2 <= y1) {
+            return Bitmap.createBitmap(textHeight.coerceAtLeast(1), textHeight.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+        }
+
+        val cropped = Bitmap.createBitmap(bitmap, x1, y1, x2 - x1, y2 - y1)
+        // Save pre-warp crop for debugging if requested
+        try {
+            if (debugRoot != null) {
+                debugRoot.mkdirs()
+                val preFile = File(debugRoot, "quad_pre_${x1}_${y1}_${System.currentTimeMillis()}.png")
+                FileOutputStream(preFile).use { out -> cropped.compress(Bitmap.CompressFormat.PNG, 90, out) }
+                Log.d("Quadrilateral", "Saved pre-warp crop: ${preFile.absolutePath}")
+            }
+        } catch (e: Exception) {
+            Log.w("Quadrilateral", "Failed to save pre-warp crop: ${e.message}")
+        }
+        for (pt in srcPts) {
+            pt.x -= x1.toFloat()
+            pt.y -= y1.toFloat()
+        }
+
+        val midTop = PointF((s[0].x + s[3].x) / 2f, (s[0].y + s[3].y) / 2f)
+        val midBottom = PointF((s[1].x + s[2].x) / 2f, (s[1].y + s[2].y) / 2f)
+        val midRight = PointF((s[2].x + s[3].x) / 2f, (s[2].y + s[3].y) / 2f)
+        val midLeft = PointF((s[0].x + s[1].x) / 2f, (s[0].y + s[1].y) / 2f)
+        val vecVx = midBottom.x - midTop.x
+        val vecVy = midBottom.y - midTop.y
+        val vecHx = midRight.x - midLeft.x
+        val vecHy = midRight.y - midLeft.y
+        val normV = kotlin.math.sqrt(vecVx * vecVx + vecVy * vecVy)
+        val normH = kotlin.math.sqrt(vecHx * vecHx + vecHy * vecHy)
+        if (normV <= 0f || normH <= 0f) {
+            return Bitmap.createBitmap(textHeight.coerceAtLeast(1), textHeight.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+        }
+
+        val ratio = normV / normH
+        val (dstW, dstH) = transformedRegionSize(ratio, direction, textHeight)
+        val useVertical = direction == TextDirection.VERTICAL
 
         val srcMat = Mat(4, 2, CvType.CV_32F)
         val dstMat = Mat(4, 2, CvType.CV_32F)
-
+        val cropMat = Mat()
+        val warped = Mat()
         try {
             srcMat.put(0, 0, floatArrayOf(
-                srcPts[0].x, srcPts[0].y,
-                srcPts[1].x, srcPts[1].y,
-                srcPts[2].x, srcPts[2].y,
-                srcPts[3].x, srcPts[3].y,
+                s[0].x, s[0].y,
+                s[1].x, s[1].y,
+                s[2].x, s[2].y,
+                s[3].x, s[3].y,
+            ))
+            dstMat.put(0, 0, floatArrayOf(
+                0f, 0f,
+                (dstW - 1).toFloat(), 0f,
+                (dstW - 1).toFloat(), (dstH - 1).toFloat(),
+                0f, (dstH - 1).toFloat(),
             ))
 
-            if (direction == TextDirection.VERTICAL) {
-                dstMat.put(0, 0, floatArrayOf(
-                    0f, 0f,
-                    h.toFloat(), 0f,
-                    h.toFloat(), w.toFloat(),
-                    0f, w.toFloat(),
-                ))
-            } else {
-                dstMat.put(0, 0, floatArrayOf(
-                    0f, 0f,
-                    w.toFloat(), 0f,
-                    w.toFloat(), h.toFloat(),
-                    0f, h.toFloat(),
-                ))
-            }
-
+            Utils.bitmapToMat(cropped, cropMat)
             val transform = Imgproc.getPerspectiveTransform(srcMat, dstMat)
-            val srcBitmapMat = Mat()
-            Utils.bitmapToMat(bitmap, srcBitmapMat)
-
-            val outW = if (direction == TextDirection.VERTICAL) h else w
-            val outH = if (direction == TextDirection.VERTICAL) w else h
-
-            val warped = Mat()
-            Imgproc.warpPerspective(
-                srcBitmapMat, warped, transform,
-                Size(outW.toDouble(), outH.toDouble())
-            )
-
-            srcBitmapMat.release()
+            Imgproc.warpPerspective(cropMat, warped, transform, Size(dstW.toDouble(), dstH.toDouble()))
             transform.release()
 
-            if (direction == TextDirection.VERTICAL) {
+            val output = if (useVertical) {
                 val rotated = Mat()
                 Core.rotate(warped, rotated, Core.ROTATE_90_COUNTERCLOCKWISE)
                 warped.release()
                 val result = Bitmap.createBitmap(rotated.cols(), rotated.rows(), Bitmap.Config.ARGB_8888)
                 Utils.matToBitmap(rotated, result)
                 rotated.release()
-                return result
+                // Save post-warp for debugging
+                try {
+                    if (debugRoot != null) {
+                        val postFile = File(debugRoot, "quad_post_${x1}_${y1}_${System.currentTimeMillis()}.png")
+                        FileOutputStream(postFile).use { out -> result.compress(Bitmap.CompressFormat.PNG, 90, out) }
+                        Log.d("Quadrilateral", "Saved post-warp crop: ${postFile.absolutePath}")
+                    }
+                } catch (e: Exception) {
+                    Log.w("Quadrilateral", "Failed to save post-warp crop: ${e.message}")
+                }
+                result
+            } else {
+                val result = Bitmap.createBitmap(warped.cols(), warped.rows(), Bitmap.Config.ARGB_8888)
+                Utils.matToBitmap(warped, result)
+                warped.release()
+                try {
+                    if (debugRoot != null) {
+                        val postFile = File(debugRoot, "quad_post_${x1}_${y1}_${System.currentTimeMillis()}.png")
+                        FileOutputStream(postFile).use { out -> result.compress(Bitmap.CompressFormat.PNG, 90, out) }
+                        Log.d("Quadrilateral", "Saved post-warp crop: ${postFile.absolutePath}")
+                    }
+                } catch (e: Exception) {
+                    Log.w("Quadrilateral", "Failed to save post-warp crop: ${e.message}")
+                }
+                result
             }
 
-            val result = Bitmap.createBitmap(warped.cols(), warped.rows(), Bitmap.Config.ARGB_8888)
-            Utils.matToBitmap(warped, result)
-            warped.release()
-            return result
+            // Log src/dst points for pixel-level inspection
+            try {
+                val srcPtsStr = "src=[(${s[0].x},${s[0].y}),(${s[1].x},${s[1].y}),(${s[2].x},${s[2].y}),(${s[3].x},${s[3].y})]"
+                val dstPtsStr = "dst=[(0,0),(${dstW - 1},0),(${dstW - 1},${dstH - 1}),(0,${dstH - 1})]"
+                Log.d("Quadrilateral", "Transformed region src/dst: $srcPtsStr -> $dstPtsStr, dstW=$dstW, dstH=$dstH")
+            } catch (e: Exception) {
+                // ignore logging failures
+            }
+
+            return output
         } finally {
             srcMat.release()
             dstMat.release()
+            cropMat.release()
+            if (!warped.empty()) warped.release()
         }
     }
 
     companion object {
+        fun transformedRegionSize(
+            ratio: Float,
+            direction: TextDirection,
+            textHeight: Int,
+        ): Pair<Int, Int> {
+            val safeHeight = textHeight.coerceAtLeast(1)
+            val safeRatio = ratio.coerceAtLeast(0.0001f)
+            return if (direction == TextDirection.VERTICAL) {
+                maxOf(safeHeight, 2) to maxOf(kotlin.math.round(safeHeight * safeRatio).toInt(), 2)
+            } else {
+                maxOf(kotlin.math.round(safeHeight / safeRatio).toInt(), 2) to maxOf(safeHeight, 2)
+            }
+        }
+
         fun sortPoints(pts: List<PointF>): List<PointF> {
             if (pts.size != 4) return pts
 

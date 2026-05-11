@@ -83,11 +83,7 @@ class DefaultTextlineMerger : TextlineMerger {
 
         val direction = resolveDirection(quads)
 
-        val sorted = if (direction == TextDirection.VERTICAL) {
-            quads.sortedByDescending { it.center.x }
-        } else {
-            quads.sortedBy { it.center.y }
-        }
+        val sorted = sortForTextBlock(quads, direction)
 
         // Font size = minimum of all quads in the region
         val fontSize = sorted.minOf { it.fontSize }
@@ -120,12 +116,45 @@ class DefaultTextlineMerger : TextlineMerger {
             lines = sorted.map { it.points },
             texts = texts,
             text = text,
+            textRaw = text,
             fontSize = fontSize,
             angle = finalAngle,
+            probability = prob,
             fgColor = sorted.firstOrNull()?.fgColor,
             bgColor = sorted.firstOrNull()?.bgColor,
-            direction = direction,
+            _direction = direction,
         )
+    }
+
+    private fun sortForTextBlock(quads: List<Quadrilateral>, direction: TextDirection): List<Quadrilateral> {
+        val hasReadingOrder = quads.any { it.readingOrderIndex != null }
+        if (hasReadingOrder) {
+            return quads.sortedWith(
+                compareBy<Quadrilateral> { it.readingOrderIndex ?: Int.MAX_VALUE }
+                    .thenBy { it.sourceIndex ?: Int.MAX_VALUE }
+                    .thenBy {
+                        if (direction == TextDirection.VERTICAL) {
+                            -it.center.x
+                        } else {
+                            it.center.y
+                        }
+                    }
+            )
+        }
+
+        return if (direction == TextDirection.VERTICAL) {
+            quads.sortedWith(
+                compareByDescending<Quadrilateral> { it.center.x }
+                    .thenBy { it.center.y }
+                    .thenBy { it.sourceIndex ?: Int.MAX_VALUE }
+            )
+        } else {
+            quads.sortedWith(
+                compareBy<Quadrilateral> { it.center.y }
+                    .thenBy { it.center.x }
+                    .thenBy { it.sourceIndex ?: Int.MAX_VALUE }
+            )
+        }
     }
 
     private fun resolveDirection(quads: List<Quadrilateral>): TextDirection {

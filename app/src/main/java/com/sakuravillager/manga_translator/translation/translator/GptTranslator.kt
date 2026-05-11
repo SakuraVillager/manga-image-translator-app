@@ -1,8 +1,10 @@
 package com.sakuravillager.manga_translator.translation.translator
 
 import android.util.Log
-import com.sakuravillager.manga_translator.translation.api.Translator
 import com.sakuravillager.manga_translator.translation.data.config.TranslatorConfig
+import com.sakuravillager.manga_translator.translation.glossary.GlossaryLoader
+import com.sakuravillager.manga_translator.translation.translator.common.CommonTranslator
+import com.sakuravillager.manga_translator.translation.util.RateLimitRetry
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.plugins.contentnegotiation.*
@@ -10,33 +12,56 @@ import io.ktor.client.request.*
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import kotlinx.serialization.json.Json
-import io.ktor.client.plugins.ClientRequestException
-import kotlinx.coroutines.delay
 
-class GptTranslator(private val httpClient: HttpClient = HttpClient {
-    install(ContentNegotiation) {
-        json(Json {
-            ignoreUnknownKeys = true
-            isLenient = true
-        })
-    }
-}) : Translator {
-    override val name = "GPT Compatible"
-    private var _isReady = false
-    override val isReady get() = _isReady
+class GptTranslator(
+    private val httpClient: HttpClient = HttpClient {
+        install(ContentNegotiation) {
+            json(Json {
+                ignoreUnknownKeys = true
+                isLenient = true
+            })
+        }
+    },
+    private val glossaryPath: String? = null,
+) : CommonTranslator() {
 
-    override suspend fun prepare() {
-        Log.d(name, "GptTranslator prepared")
-        _isReady = true
-    }
+    override val _LANGUAGE_CODE_MAP: Map<String, String> = mapOf(
+        "CHS" to "Simplified Chinese",
+        "CHT" to "Traditional Chinese",
+        "CSY" to "Czech",
+        "NLD" to "Dutch",
+        "ENG" to "English",
+        "FRA" to "French",
+        "DEU" to "German",
+        "HUN" to "Hungarian",
+        "ITA" to "Italian",
+        "JPN" to "Japanese",
+        "KOR" to "Korean",
+        "PLK" to "Polish",
+        "PTB" to "Portuguese (Brazil)",
+        "ROM" to "Romanian",
+        "RUS" to "Russian",
+        "ESP" to "Spanish",
+        "TRK" to "Turkish",
+        "UKR" to "Ukrainian",
+        "VIN" to "Vietnamese",
+        "ARA" to "Arabic",
+        "IND" to "Indonesian",
+        "POL" to "Polish",
+        "CNR" to "Montenegrin",
+        "SRP" to "Serbian",
+        "HRV" to "Croatian",
+        "THA" to "Thai",
+        "FIL" to "Filipino (Tagalog)",
+    )
 
-    override suspend fun release() {
-        Log.d(name, "GptTranslator released")
-        _isReady = false
-    }
+    override val _MAX_REQUESTS_PER_MINUTE: Int = 20
 
-    override val supportedSourceLanguages: Set<String> = VALID_LANGUAGES.keys
-    override val supportedTargetLanguages: Set<String> = VALID_LANGUAGES.keys
+    // Captured from translate() to make available in _translate()
+    private var _apiKey: String? = null
+    private var _apiBase: String? = null
+    private var _model: String? = null
+    private var _prevContext: String? = null
 
     override suspend fun translate(
         texts: List<String>,
@@ -44,34 +69,59 @@ class GptTranslator(private val httpClient: HttpClient = HttpClient {
         toLanguage: String,
         config: TranslatorConfig,
     ): List<String> {
-        if (texts.isEmpty() || texts.all { it.isBlank() }) return texts
+        _apiKey = config.apiKey
+        _apiBase = config.apiBase
+        _model = config.model
+        _prevContext = config.prevContext
+        return super.translate(texts, fromLanguage, toLanguage, config)
+    }
 
+    override suspend fun _translate(
+        fromLang: String,
+        toLang: String,
+        queries: List<String>,
+    ): List<String> {
         return try {
-            val endpoint = "${config.apiBase?.trimEnd('/') ?: "https://api.openai.com/v1"}/chat/completions"
-            val sourceLang = VALID_LANGUAGES[fromLanguage] ?: fromLanguage
-            val targetLang = VALID_LANGUAGES[toLanguage] ?: toLanguage
+            val endpoint = "${_apiBase?.trimEnd('/') ?: "https://api.openai.com/v1"}/chat/completions"
 
-            val systemPrompt = "You are a professional manga translator. Translate the following text lines from $sourceLang to $targetLang. Preserve line count exactly. Return only the translations, one per line, no explanations, no numbering."
+            val contextPrompt = _prevContext
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?.let { "\n\nPrevious page context:\n$it" }
+                .orEmpty()
 
-            val numberedTexts = texts.mapIndexed { i, t -> "<|${i + 1}|>$t" }.joinToString("\n")
+            val systemPrompt = "You are a professional manga translator. Translate the following text lines from $fromLang to $toLang. Preserve line count exactly. Return only the translations, one per line, no explanations, no numbering.$contextPrompt"
+
+            val numberedTexts = queries.mapIndexed { i, t -> "<|${i + 1}|>$t" }.joinToString("\n")
+
+            // Glossary injection (if configured and has matching terms)
+            val glossaryMessages = if (glossaryPath != null) {
+                val entries = GlossaryLoader.load(glossaryPath)
+                val relevant = GlossaryLoader.extractRelevantTerms(entries, queries)
+                if (relevant.isNotEmpty()) {
+                    val glossaryText = relevant.entries.joinToString("\n") { "${it.key} → ${it.value}" }
+                    listOf(ChatMessage(role = "system", content = "Please translate based on the following glossary:\n$glossaryText"))
+                } else emptyList()
+            } else emptyList()
 
             val request = ChatCompletionRequest(
-                model = config.model ?: "gpt-4o-mini",
+                model = _model ?: "gpt-4o-mini",
                 messages = listOf(
                     ChatMessage(role = "system", content = systemPrompt),
+                ) + glossaryMessages + listOf(
                     ChatMessage(role = "user", content = numberedTexts),
                 ),
             )
 
-            val response: ChatCompletionResponse = retryWithBackoff {
+            val response: ChatCompletionResponse = RateLimitRetry.retryWithBackoff(TAG) {
                 httpClient.post(endpoint) {
-                    header(HttpHeaders.Authorization, "Bearer ${config.apiKey ?: ""}")
+                    header(HttpHeaders.Authorization, "Bearer ${_apiKey ?: ""}")
                     contentType(ContentType.Application.Json)
                     setBody(request)
                 }.body()
             }
 
-            val content = response.choices.firstOrNull()?.message?.content ?: return texts
+            val content = response.choices.firstOrNull()?.message?.content ?: return queries
 
             // Parse response: remove <|N|> markers and split by lines
             val lines = content.lines()
@@ -80,73 +130,19 @@ class GptTranslator(private val httpClient: HttpClient = HttpClient {
                 .map { it.replace(Regex("<\\|\\d+\\|>"), "").trim() }
 
             // Ensure output count matches input count
-            if (lines.size != texts.size) {
-                Log.w(name, "Line count mismatch: expected ${texts.size}, got ${lines.size}. Falling back.")
-                return texts
+            if (lines.size != queries.size) {
+                Log.w(TAG, "Line count mismatch: expected ${queries.size}, got ${lines.size}. Falling back.")
+                return queries
             }
 
             lines
         } catch (e: Exception) {
-            Log.e(name, "Translation API error: ${e.message}", e)
-            texts  // Graceful degradation - return original
+            Log.e(TAG, "Translation API error: ${e.message}", e)
+            queries  // Graceful degradation - return original
         }
-    }
-
-    override fun supportsLanguagePair(from: String, to: String): Boolean = true
-
-    private suspend fun <T> retryWithBackoff(
-        maxRetries: Int = 3,
-        baseDelayMs: Long = 1000L,
-        maxDelayMs: Long = 30_000L,
-        block: suspend () -> T,
-    ): T {
-        var lastException: Exception? = null
-        for (attempt in 0..maxRetries) {
-            try {
-                return block()
-            } catch (e: Exception) {
-                lastException = e
-                if (attempt < maxRetries) {
-                    val delayMs = when {
-                        e is ClientRequestException && e.response.status.value == 429 -> {
-                            val retryAfter = e.response.headers[HttpHeaders.RetryAfter]
-                            retryAfter?.toLongOrNull()?.times(1000L)
-                                ?: minOf(baseDelayMs * (1L shl attempt), maxDelayMs)
-                        }
-                        else -> minOf(baseDelayMs * (1L shl attempt), maxDelayMs)
-                    }
-                    Log.w(TAG, "Attempt ${attempt + 1}/${maxRetries + 1} failed: ${e.message}. Retrying in ${delayMs}ms...")
-                    delay(delayMs)
-                }
-            }
-        }
-        throw lastException!!
     }
 
     companion object {
         private const val TAG = "GptTranslator"
-        val VALID_LANGUAGES = mapOf(
-            "CHS" to "Simplified Chinese",
-            "CHT" to "Traditional Chinese",
-            "CSY" to "Czech",
-            "NLD" to "Dutch",
-            "ENG" to "English",
-            "FRA" to "French",
-            "DEU" to "German",
-            "HUN" to "Hungarian",
-            "ITA" to "Italian",
-            "JPN" to "Japanese",
-            "KOR" to "Korean",
-            "PLK" to "Polish",
-            "PTB" to "Portuguese (Brazil)",
-            "ROM" to "Romanian",
-            "RUS" to "Russian",
-            "ESP" to "Spanish",
-            "TRK" to "Turkish",
-            "UKR" to "Ukrainian",
-            "VIN" to "Vietnamese",
-            "ARA" to "Arabic",
-            "IND" to "Indonesian",
-        )
     }
 }

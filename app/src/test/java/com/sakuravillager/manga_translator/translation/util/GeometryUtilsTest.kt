@@ -16,15 +16,22 @@ class GeometryUtilsTest {
 
     // ── polygonDistance ────────────────────────────────────────────────
 
+    private fun pt(x: Float, y: Float): PointF {
+        val p = PointF()
+        PointF::class.java.getField("x").setFloat(p, x)
+        PointF::class.java.getField("y").setFloat(p, y)
+        return p
+    }
+
     @Test
     fun `polygonDistance separated squares returns positive distance`() {
         // Square A: (0,0)-(2,0)-(2,2)-(0,2)
         // Square B: (4,0)-(6,0)-(6,2)-(4,2) — gap of 2 units
         val sqA = listOf(
-            PointF(0f, 0f), PointF(2f, 0f), PointF(2f, 2f), PointF(0f, 2f),
+            pt(0f, 0f), pt(2f, 0f), pt(2f, 2f), pt(0f, 2f),
         )
         val sqB = listOf(
-            PointF(4f, 0f), PointF(6f, 0f), PointF(6f, 2f), PointF(4f, 2f),
+            pt(4f, 0f), pt(6f, 0f), pt(6f, 2f), pt(4f, 2f),
         )
         val dist = polygonDistance(sqA, sqB)
         // Minimum distance is from (2,0) to (4,0) = 2
@@ -36,10 +43,10 @@ class GeometryUtilsTest {
         // Square A: (0,0)-(3,0)-(3,3)-(0,3)
         // Square B: (1,1)-(4,1)-(4,4)-(1,4) — overlaps in region (1,1)-(3,3)
         val sqA = listOf(
-            PointF(0f, 0f), PointF(3f, 0f), PointF(3f, 3f), PointF(0f, 3f),
+            pt(0f, 0f), pt(3f, 0f), pt(3f, 3f), pt(0f, 3f),
         )
         val sqB = listOf(
-            PointF(1f, 1f), PointF(4f, 1f), PointF(4f, 4f), PointF(1f, 4f),
+            pt(1f, 1f), pt(4f, 1f), pt(4f, 4f), pt(1f, 4f),
         )
         val dist = polygonDistance(sqA, sqB)
         assertEquals(0f, dist, 0.001f)
@@ -49,10 +56,10 @@ class GeometryUtilsTest {
     fun `polygonDistance touching squares returns zero`() {
         // Squares touching at x=2 edge
         val sqA = listOf(
-            PointF(0f, 0f), PointF(2f, 0f), PointF(2f, 2f), PointF(0f, 2f),
+            pt(0f, 0f), pt(2f, 0f), pt(2f, 2f), pt(0f, 2f),
         )
         val sqB = listOf(
-            PointF(2f, 0f), PointF(4f, 0f), PointF(4f, 2f), PointF(2f, 2f),
+            pt(2f, 0f), pt(4f, 0f), pt(4f, 2f), pt(2f, 2f),
         )
         val dist = polygonDistance(sqA, sqB)
         assertEquals(0f, dist, 0.001f)
@@ -60,7 +67,7 @@ class GeometryUtilsTest {
 
     @Test
     fun `polygonDistance with degenerate polygons returns MAX_VALUE`() {
-        val line = listOf(PointF(0f, 0f), PointF(1f, 1f))
+        val line = listOf(pt(0f, 0f), pt(1f, 1f))
         val sq = listOf(
             PointF(0f, 0f), PointF(2f, 0f), PointF(2f, 2f), PointF(0f, 2f),
         )
@@ -74,7 +81,7 @@ class GeometryUtilsTest {
     fun `shoelaceArea rectangle returns correct area`() {
         // 4x3 rectangle → area = 12
         val rect = listOf(
-            PointF(0f, 0f), PointF(4f, 0f), PointF(4f, 3f), PointF(0f, 3f),
+            pt(0f, 0f), pt(4f, 0f), pt(4f, 3f), pt(0f, 3f),
         )
         assertEquals(12f, shoelaceArea(rect), 0.001f)
     }
@@ -83,7 +90,7 @@ class GeometryUtilsTest {
     fun `shoelaceArea triangle`() {
         // Right triangle with legs 3 and 4 → area = 6
         val tri = listOf(
-            PointF(0f, 0f), PointF(3f, 0f), PointF(0f, 4f),
+            pt(0f, 0f), pt(3f, 0f), pt(0f, 4f),
         )
         assertEquals(6f, shoelaceArea(tri), 0.001f)
     }
@@ -149,8 +156,8 @@ class GeometryUtilsTest {
     @Test
     fun `convexHull square returns four corners`() {
         val pts = listOf(
-            PointF(0f, 0f), PointF(1f, 0f), PointF(0f, 1f),
-            PointF(1f, 1f), PointF(0.5f, 0.5f), // interior point
+            pt(0f, 0f), pt(1f, 0f), pt(0f, 1f),
+            pt(1f, 1f), pt(0.5f, 0.5f), // interior point
         )
         val hull = convexHull(pts)
         // Hull should have 4 vertices (excluding the interior point)
@@ -169,7 +176,7 @@ class GeometryUtilsTest {
 
     @Test
     fun `convexHull fewer than 3 points returns as-is`() {
-        val pts = listOf(PointF(0f, 0f), PointF(1f, 1f))
+        val pts = listOf(pt(0f, 0f), pt(1f, 1f))
         val hull = convexHull(pts)
         assertEquals(2, hull.size)
     }
@@ -178,7 +185,7 @@ class GeometryUtilsTest {
 
     @Test
     fun `midpoint of two points`() {
-        val m = midpoint(PointF(2f, 4f), PointF(6f, 8f))
+        val m = midpoint(pt(2f, 4f), pt(6f, 8f))
         assertEquals(4f, m.x, 0.001f)
         assertEquals(6f, m.y, 0.001f)
     }
@@ -186,13 +193,13 @@ class GeometryUtilsTest {
     @Test
     fun `euclideanDistance between two points`() {
         // 3-4-5 triangle
-        val d = euclideanDistance(PointF(0f, 0f), PointF(3f, 4f))
+        val d = euclideanDistance(pt(0f, 0f), pt(3f, 4f))
         assertEquals(5f, d, 0.001f)
     }
 
     @Test
     fun `normalize of non-zero vector`() {
-        val v = PointF(3f, 4f)
+        val v = pt(3f, 4f)
         val n = normalize(v)
         assertEquals(1f, sqrt(n.x * n.x + n.y * n.y), 0.001f)
         assertEquals(0.6f, n.x, 0.001f)
@@ -201,32 +208,32 @@ class GeometryUtilsTest {
 
     @Test
     fun `normalize of zero vector returns origin`() {
-        val n = normalize(PointF(0f, 0f))
+        val n = normalize(pt(0f, 0f))
         assertEquals(0f, n.x, 0f)
         assertEquals(0f, n.y, 0f)
     }
 
     @Test
     fun `dot product`() {
-        val d = dot(PointF(1f, 0f), PointF(0f, 1f))
+        val d = dot(pt(1f, 0f), pt(0f, 1f))
         assertEquals(0f, d, 0.001f)
     }
 
     @Test
     fun `dot product parallel vectors`() {
-        val d = dot(PointF(2f, 0f), PointF(3f, 0f))
+        val d = dot(pt(2f, 0f), pt(3f, 0f))
         assertEquals(6f, d, 0.001f)
     }
 
     @Test
     fun `norm of vector`() {
-        val n = norm(PointF(3f, 4f))
+        val n = norm(pt(3f, 4f))
         assertEquals(5f, n, 0.001f)
     }
 
     @Test
     fun `norm of zero vector`() {
-        val n = norm(PointF(0f, 0f))
+        val n = norm(pt(0f, 0f))
         assertEquals(0f, n, 0f)
     }
 }

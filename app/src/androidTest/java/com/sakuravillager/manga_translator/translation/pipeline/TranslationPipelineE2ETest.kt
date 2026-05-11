@@ -17,7 +17,7 @@ import com.sakuravillager.manga_translator.translation.inpaint.SimpleFillInpaint
 import com.sakuravillager.manga_translator.translation.mask.OpenCVMaskRefiner
 import com.sakuravillager.manga_translator.translation.merge.DefaultTextlineMerger
 import com.sakuravillager.manga_translator.translation.render.HorizontalTextRenderer
-import com.sakuravillager.manga_translator.translation.stub.OriginalTranslator
+import com.sakuravillager.manga_translator.translation.translator.OriginalTranslator
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield

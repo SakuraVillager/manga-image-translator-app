@@ -11,7 +11,7 @@ import kotlin.math.sqrt
  * Returns 0 if the polygons overlap.
  */
 fun polygonDistance(ptsA: List<PointF>, ptsB: List<PointF>): Float {
-    if (ptsA.size < 2 || ptsB.size < 2) return Float.MAX_VALUE
+    if (ptsA.size < 3 || ptsB.size < 3) return Float.MAX_VALUE
 
     // Overlap check: if any vertex of one polygon is inside the other
     if (ptsA.size >= 3 && ptsB.size >= 3) {
@@ -225,7 +225,7 @@ private fun onSegment(
  * Midpoint of two points.
  */
 fun midpoint(a: PointF, b: PointF): PointF {
-    return PointF((a.x + b.x) / 2f, (a.y + b.y) / 2f)
+    return pointF((a.x + b.x) / 2f, (a.y + b.y) / 2f)
 }
 
 /**
@@ -243,8 +243,8 @@ fun euclideanDistance(a: PointF, b: PointF): Float {
  */
 fun normalize(vec: PointF): PointF {
     val len = sqrt(vec.x * vec.x + vec.y * vec.y)
-    if (len == 0f) return PointF(0f, 0f)
-    return PointF(vec.x / len, vec.y / len)
+    if (len == 0f) return pointF(0f, 0f)
+    return pointF(vec.x / len, vec.y / len)
 }
 
 /**
@@ -259,6 +259,13 @@ fun dot(a: PointF, b: PointF): Float {
  */
 fun norm(vec: PointF): Float {
     return sqrt(vec.x * vec.x + vec.y * vec.y)
+}
+
+private fun pointF(x: Float, y: Float): PointF {
+    return PointF().apply {
+        this.x = x
+        this.y = y
+    }
 }
 
 

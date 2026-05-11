@@ -1,6 +1,7 @@
 package com.sakuravillager.manga_translator.translation.model
 
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.*
@@ -60,6 +61,10 @@ class ModelDownloadManagerTest {
         val downloadStatusField = ModelDownloadManager::class.java.getDeclaredField("_downloadStatus")
         downloadStatusField.isAccessible = true
         downloadStatusField.set(manager, MutableStateFlow(DownloadStatus.Idle))
+
+        val downloadStatusPublicField = ModelDownloadManager::class.java.getDeclaredField("downloadStatus")
+        downloadStatusPublicField.isAccessible = true
+        downloadStatusPublicField.set(manager, MutableStateFlow(DownloadStatus.Idle).asStateFlow())
 
         return manager
     }
@@ -199,10 +204,11 @@ class ModelDownloadManagerTest {
     @Test
     fun `verifySha256 returns true for matching hash`() = runBlocking {
         val content = "verify me"
-        val expectedHash = "c64680091a65c05536c61e0d08e3359b9b50ebf77ccde0e60ea446b70c4b9788"
 
         val tempFile = File(tempDir, "verify.bin").apply { writeText(content) }
         val manager = createManager()
+
+        val expectedHash = computeSha256Reference(tempFile)
 
         val result = manager.verifySha256(tempFile, expectedHash)
         assertTrue(result)
@@ -233,10 +239,12 @@ class ModelDownloadManagerTest {
 
     @Test
     fun `ModelRegistry contains expected models`() {
-        assertNotNull(ModelRegistry.getModel("ctd"))
-        assertNotNull(ModelRegistry.getModel("ocr_48px"))
-        assertNotNull(ModelRegistry.getModel("alphabet"))
-        assertEquals(3, ModelRegistry.allModels.size)
+        assertNotNull(ModelRegistry.getModel("comictextdetector"))
+        assertNotNull(ModelRegistry.getModel("ocr_ctc_48px"))
+        assertNotNull(ModelRegistry.getModel("alphabet_v5"))
+        assertNotNull(ModelRegistry.getModel("noto_sans_cjk_kr_regular"))
+        assertNotNull(ModelRegistry.getModel("aot_inpainting"))
+        assertEquals(5, ModelRegistry.allModels.size)
     }
 
     @Test
@@ -247,7 +255,7 @@ class ModelDownloadManagerTest {
     @Test
     fun `ModelInfo data class properties`() {
         val info = ModelRegistry.CTD_MODEL
-        assertEquals("ctd", info.name)
+        assertEquals("comictextdetector", info.name)
         assertTrue(info.url.startsWith("https://"))
         assertEquals(64, info.sha256.length) // SHA-256 hex string is 64 chars
         assertTrue(info.sizeBytes > 0)
