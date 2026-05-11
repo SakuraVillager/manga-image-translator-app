@@ -162,6 +162,74 @@ object ModelRegistry {
         sizeBytes = 1_000_000L,
     )
 
+    // ─── Sugoi V4.0 ───────────────────────────────────────────────────
+    //
+    // T5-based encoder-decoder model fine-tuned on manga text for
+    // JPN→ENG translation.  Exported as a single ONNX model with a
+    // SentencePiece tokenizer.
+    //
+    // ⚠️ PLACEHOLDER — SHA-256 hashes and URLs are not yet finalised.
+    //     Will be updated when ONNX model export pipeline is complete.
+
+    val SUGOI_MODEL = ModelInfo(
+        name = "sugoi_v4",
+        url = "https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/sugoi_v4.onnx",
+        sha256 = "0000000000000000000000000000000000000000000000000000000000000000",
+        sizeBytes = 500_000_000L,
+    )
+
+    val SUGOI_TOKENIZER_MODEL = ModelInfo(
+        name = "sugoi_v4_tokenizer",
+        url = "https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/sugoi_v4_tokenizer.spm",
+        sha256 = "0000000000000000000000000000000000000000000000000000000000000000",
+        sizeBytes = 1_000_000L,
+    )
+
+    // ─── JParaCrawl ───────────────────────────────────────────────────
+    //
+    // Transformer-based model trained on the JParaCrawl corpus for
+    // Japanese↔English translation.  Exported as a single ONNX model
+    // with a SentencePiece tokenizer.
+    //
+    // ⚠️ PLACEHOLDER — SHA-256 hashes and URLs are not yet finalised.
+    //     Will be updated when ONNX model export pipeline is complete.
+
+    val JPARACRAWL_MODEL = ModelInfo(
+        name = "jparacrawl",
+        url = "https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/jparacrawl.onnx",
+        sha256 = "0000000000000000000000000000000000000000000000000000000000000000",
+        sizeBytes = 300_000_000L,
+    )
+
+    val JPARACRAWL_TOKENIZER_MODEL = ModelInfo(
+        name = "jparacrawl_tokenizer",
+        url = "https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/jparacrawl_tokenizer.spm",
+        sha256 = "0000000000000000000000000000000000000000000000000000000000000000",
+        sizeBytes = 1_000_000L,
+    )
+
+    // ─── JParaCrawl Big ───────────────────────────────────────────────
+    //
+    // Larger variant of JParaCrawl with more parameters for higher-quality
+    // Japanese↔English translation.
+    //
+    // ⚠️ PLACEHOLDER — SHA-256 hashes and URLs are not yet finalised.
+    //     Will be updated when ONNX model export pipeline is complete.
+
+    val JPARACRAWL_BIG_MODEL = ModelInfo(
+        name = "jparacrawl_big",
+        url = "https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/jparacrawl_big.onnx",
+        sha256 = "0000000000000000000000000000000000000000000000000000000000000000",
+        sizeBytes = 800_000_000L,
+    )
+
+    val JPARACRAWL_BIG_TOKENIZER_MODEL = ModelInfo(
+        name = "jparacrawl_big_tokenizer",
+        url = "https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/jparacrawl_big_tokenizer.spm",
+        sha256 = "0000000000000000000000000000000000000000000000000000000000000000",
+        sizeBytes = 1_000_000L,
+    )
+
     val allModels: List<ModelInfo> = listOf(
         CTD_MODEL,
         OCR_48PX_MODEL,
@@ -175,6 +243,12 @@ object ModelRegistry {
         MBART50_MODEL,
         MBART50_DECODER_MODEL,
         MBART50_TOKENIZER_MODEL,
+        SUGOI_MODEL,
+        SUGOI_TOKENIZER_MODEL,
+        JPARACRAWL_MODEL,
+        JPARACRAWL_TOKENIZER_MODEL,
+        JPARACRAWL_BIG_MODEL,
+        JPARACRAWL_BIG_TOKENIZER_MODEL,
     )
 
     fun getModel(name: String): ModelInfo? = allModels.find { it.name == name }
