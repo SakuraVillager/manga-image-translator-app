@@ -83,11 +83,11 @@ fun createTranslator(type: TranslatorType): Translator = when (type) {
         NoOpTranslator()
     }
     TranslatorType.M2M100 -> {
-        Log.w(TAG, "M2M100 translator is not yet implemented, falling back to NONE")
+        Log.w(TAG, "M2M100 translator is not yet implemented via dispatch, falling back to NONE")
         NoOpTranslator()
     }
     TranslatorType.M2M100_BIG -> {
-        Log.w(TAG, "M2M100_BIG translator is not yet implemented, falling back to NONE")
+        Log.w(TAG, "M2M100_BIG translator is not yet implemented via dispatch, falling back to NONE")
         NoOpTranslator()
     }
     TranslatorType.MBART50 -> {

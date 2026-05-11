@@ -40,11 +40,16 @@ import com.sakuravillager.manga_translator.translation.stub.NoOpTextRecognizer
 import com.sakuravillager.manga_translator.translation.stub.NoOpTextRenderer
 import com.sakuravillager.manga_translator.translation.stub.NoOpTextlineMerger
 import com.sakuravillager.manga_translator.translation.data.config.TranslatorType
+import com.sakuravillager.manga_translator.translation.translator.M2M100BigTranslator
+import com.sakuravillager.manga_translator.translation.translator.M2M100Translator
 import com.sakuravillager.manga_translator.translation.translator.NoOpTranslator
 import com.sakuravillager.manga_translator.translation.translator.OriginalTranslator
 import com.sakuravillager.manga_translator.translation.translator.CompositeTranslator
 import com.sakuravillager.manga_translator.translation.translator.DeeplTranslator
 import com.sakuravillager.manga_translator.translation.translator.GptTranslator
+import com.sakuravillager.manga_translator.translation.translator.MBart50Translator
+import com.sakuravillager.manga_translator.translation.translator.Qwen2BigTranslator
+import com.sakuravillager.manga_translator.translation.translator.Qwen2Translator
 import com.sakuravillager.manga_translator.translation.translator.TranslatorStep
 import com.sakuravillager.manga_translator.data.preferences.PreferencesProvider
 import com.sakuravillager.manga_translator.translation.config.TranslationConfigMapper
@@ -92,7 +97,10 @@ val translationModule = module {
     // Translator — conditional injection based on TranslatorType
     single<Translator> {
         val config: TranslationConfig = get()
-        buildTranslator(config, get())
+        val httpClient: HttpClient = get()
+        val modelDownloadManager: ModelDownloadManager = get()
+        val onnxSessionManager = get<com.sakuravillager.manga_translator.translation.onnx.OnnxSessionManager>()
+        buildTranslator(config, httpClient, modelDownloadManager, onnxSessionManager)
     }
 
     // Ktor HttpClient (for GPT translator and future API integrations)
@@ -145,18 +153,25 @@ val translationModule = module {
     }
 }
 
-private fun buildTranslator(config: TranslationConfig, httpClient: HttpClient): Translator {
-    val chain = parseTranslatorChain(config, httpClient)
+private fun buildTranslator(
+    config: TranslationConfig,
+    httpClient: HttpClient,
+    modelDownloadManager: ModelDownloadManager,
+    onnxSessionManager: com.sakuravillager.manga_translator.translation.onnx.OnnxSessionManager,
+): Translator {
+    val chain = parseTranslatorChain(config, httpClient, modelDownloadManager, onnxSessionManager)
     if (chain.isNotEmpty()) {
         return CompositeTranslator(chain)
     }
 
-    return createTranslator(config.translator.translator, httpClient)
+    return createTranslator(config.translator.translator, httpClient, modelDownloadManager, onnxSessionManager)
 }
 
 private fun parseTranslatorChain(
     config: TranslationConfig,
     httpClient: HttpClient,
+    modelDownloadManager: ModelDownloadManager,
+    onnxSessionManager: com.sakuravillager.manga_translator.translation.onnx.OnnxSessionManager,
 ): List<TranslatorStep> {
     val chainSpec = config.translator.translatorChain?.trim().orEmpty()
     if (chainSpec.isEmpty()) return emptyList()
@@ -174,7 +189,7 @@ private fun parseTranslatorChain(
                 .getOrNull() ?: return@mapNotNull null
 
             TranslatorStep(
-                translator = createTranslator(translatorType, httpClient),
+                translator = createTranslator(translatorType, httpClient, modelDownloadManager, onnxSessionManager),
                 targetLanguage = targetLanguage,
             )
         }
@@ -183,11 +198,35 @@ private fun parseTranslatorChain(
 private fun createTranslator(
     translatorType: TranslatorType,
     httpClient: HttpClient,
+    modelDownloadManager: ModelDownloadManager,
+    onnxSessionManager: com.sakuravillager.manga_translator.translation.onnx.OnnxSessionManager,
 ): Translator {
     return when (translatorType) {
         TranslatorType.GPT_COMPATIBLE -> GptTranslator(httpClient)
         TranslatorType.DEEPL -> DeeplTranslator(httpClient)
-        // New offline translators delegate to TranslatorDispatch (no httpClient needed)
+        // Qwen2 ONNX LLM translators — constructed with resolved dependencies
+        TranslatorType.QWEN2 -> Qwen2Translator(
+            modelDownloadManager = modelDownloadManager,
+            onnxSessionManager = onnxSessionManager,
+        )
+        TranslatorType.QWEN2_BIG -> Qwen2BigTranslator(
+            modelDownloadManager = modelDownloadManager,
+            onnxSessionManager = onnxSessionManager,
+        )
+        TranslatorType.M2M100 -> M2M100Translator(
+            modelDownloadManager = modelDownloadManager,
+            onnxSessionManager = onnxSessionManager,
+        )
+        TranslatorType.M2M100_BIG -> M2M100BigTranslator(
+            modelDownloadManager = modelDownloadManager,
+            onnxSessionManager = onnxSessionManager,
+        )
+        // MBart50 multilingual encoder-decoder ONNX translator
+        TranslatorType.MBART50 -> MBart50Translator(
+            modelDownloadManager = modelDownloadManager,
+            onnxSessionManager = onnxSessionManager,
+        )
+        // Other offline translators delegate to TranslatorDispatch (no httpClient needed)
         else -> com.sakuravillager.manga_translator.translation.translator.createTranslator(translatorType)
     }
 }
