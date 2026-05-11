@@ -20,6 +20,7 @@ data class TranslationContext(
     var imgRendered: Bitmap? = null,
     var resultBitmap: Bitmap? = null,
     var fromLanguage: String? = null,
+    var renderMask: Bitmap? = null,
     var debugFolder: String? = null,
     var usePlaceholder: Boolean = false,
     var debugImages: MutableMap<String, Bitmap> = mutableMapOf(),

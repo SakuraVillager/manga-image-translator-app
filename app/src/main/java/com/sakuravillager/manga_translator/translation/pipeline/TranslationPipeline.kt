@@ -45,9 +45,10 @@ class TranslationPipeline(
 ) {
     companion object {
         private const val TAG = "TranslationPipeline"
-        private val pageHistoryLock = Any()
-        private val pageHistory = ArrayDeque<Map<String, String>>()
     }
+
+    private val pageHistoryLock = Any()
+    private val pageHistory = ArrayDeque<Map<String, String>>()
 
     private val _progress = MutableStateFlow<TranslationProgress>(TranslationProgress.Idle)
     val progress: StateFlow<TranslationProgress> = _progress.asStateFlow()
@@ -165,8 +166,11 @@ class TranslationPipeline(
 
             // Step 6: Translation
             _progress.value = TranslationProgress.Processing("Translating...", 0.5f)
+            // Detect source language from merged text
+            val allText = ctx.textRegions.joinToString("") { it.text }
+            ctx.fromLanguage = detectSourceLanguage(allText).first
             try {
-                ctx.textRegions = translateWithValidationRetry(ctx.textRegions, config)
+                ctx.textRegions = translateWithValidationRetry(ctx.textRegions, config, ctx.fromLanguage)
             } catch (e: Exception) {
                 Log.e(TAG, "Error during translation: ${e.message}", e)
                 if (!config.ignoreErrors) throw e
@@ -277,7 +281,7 @@ class TranslationPipeline(
                         results.add(TranslationResult.NoText(bitmap))
                         continue
                     }
-                    ctx.textRegions = translateWithValidationRetry(ctx.textRegions, config)
+                    ctx.textRegions = translateWithValidationRetry(ctx.textRegions, config, ctx.fromLanguage)
                     completeTranslationPipeline(ctx, processingBitmap = ctx.imgRgb ?: bitmap, inputBitmap = bitmap, config)
                     rememberPageTranslation(ctx.textRegions)
                     results.add(TranslationResult.Success(ctx.resultBitmap ?: bitmap, ctx.textRegions))
@@ -461,6 +465,10 @@ class TranslationPipeline(
         // Apply pre-dictionary
         ctx.textRegions = applyPreDictionary(ctx.textRegions, config).toMutableList()
 
+        // Detect source language from merged text
+        val allText = ctx.textRegions.joinToString("") { it.text }
+        ctx.fromLanguage = detectSourceLanguage(allText).first
+
         return ctx  // contains textRegions ready for translation
     }
 
@@ -611,6 +619,7 @@ class TranslationPipeline(
     private suspend fun translateWithValidationRetry(
         regions: List<TextBlock>,
         config: TranslationConfig,
+        fromLanguage: String? = null,
     ): MutableList<TextBlock> {
         if (regions.isEmpty()) return mutableListOf()
         if (config.translator.translator == TranslatorType.NONE) {
@@ -631,7 +640,7 @@ class TranslationPipeline(
         repeat((if (config.enablePostTranslationCheck) config.postCheckMaxRetryAttempts else 0) + 1) { attempt ->
             candidateTranslations = translator.translate(
                 translatableTexts,
-                "auto",
+                fromLanguage ?: "auto",
                 config.translator.targetLanguage,
                 translatorConfig,
             )
