@@ -34,6 +34,8 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 class TranslationPipeline(
     private val detector: TextDetector,
@@ -51,7 +53,7 @@ class TranslationPipeline(
         private const val TAG = "TranslationPipeline"
     }
 
-    private val pageHistoryLock = Any()
+    private val pageHistoryMutex = Mutex()
     private val pageHistory = ArrayDeque<Map<String, String>>()
 
     /** Pre-compiled regex from config.filterText (matches Python's config.re_filter_text). */
@@ -872,11 +874,11 @@ class TranslationPipeline(
         return ctx
     }
 
-    private fun buildPreviousPageContext(contextPages: Int): String {
+    private suspend fun buildPreviousPageContext(contextPages: Int): String {
         if (contextPages <= 0) return ""
 
-        val recentPages = synchronized(pageHistoryLock) {
-            if (pageHistory.isEmpty()) return@synchronized emptyList()
+        val recentPages = pageHistoryMutex.withLock {
+            if (pageHistory.isEmpty()) return@withLock emptyList()
             pageHistory.takeLast(contextPages)
         }
         if (recentPages.isEmpty()) return ""
@@ -893,7 +895,7 @@ class TranslationPipeline(
         return "Here are the previous translation results for reference:\n" + numbered.joinToString("\n")
     }
 
-    private fun rememberPageTranslation(regions: List<TextBlock>) {
+    private suspend fun rememberPageTranslation(regions: List<TextBlock>) {
         if (regions.isEmpty()) return
 
         val page = regions.associate { region ->
@@ -903,7 +905,7 @@ class TranslationPipeline(
 
         if (page.isEmpty()) return
 
-        synchronized(pageHistoryLock) {
+        pageHistoryMutex.withLock {
             pageHistory.addLast(page)
             while (pageHistory.size > 12) {
                 pageHistory.removeFirst()
