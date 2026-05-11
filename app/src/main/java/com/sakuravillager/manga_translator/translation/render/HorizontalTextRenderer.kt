@@ -74,8 +74,9 @@ class HorizontalTextRenderer(
         val canvas = Canvas(result)
 
         for (region in textRegions) {
+            val renderText = region.getTranslationForRendering()
             // Skip regions without translation text
-            if (region.translation.isEmpty()) continue
+            if (renderText.isEmpty()) continue
 
             val rect = region.minRect
             // Skip empty/invalid bounding rects
@@ -89,21 +90,22 @@ class HorizontalTextRenderer(
                 maxOf(textSize, 1f)
             }
 
-            val fgColor = config.fontColor?.let { parseColorOrNull(it) } ?: region.fgColor ?: Color.BLACK
-            val bgColor = region.bgColor ?: Color.WHITE
+            val (regionFg, regionBg) = region.getFontColors()
+            val fgColor = config.fontColor?.let { parseColorOrNull(it) } ?: regionFg
+            val bgColor = regionBg
             val paint = buildPaint(region, textSize, fgColor)
             val effectiveLineSpacing = if (region.lineSpacing > 0f) region.lineSpacing else config.lineSpacing
 
             when (region.direction) {
                 TextDirection.VERTICAL -> {
-                    renderVerticalText(canvas, region.translation, rect, paint, fgColor, bgColor, config.disableFontBorder)
+                    renderVerticalText(canvas, renderText, rect, paint, fgColor, bgColor, config.disableFontBorder, region.strokeWidth)
                     continue
                 }
                 TextDirection.HORIZONTAL_RTL -> {
-                    if (region.translation.contains('\n')) {
+                    if (renderText.contains('\n')) {
                         renderMultilineHorizontal(
                             canvas = canvas,
-                            text = region.translation,
+                            text = renderText,
                             rect = rect,
                             paint = paint,
                             fgColor = fgColor,
@@ -111,19 +113,20 @@ class HorizontalTextRenderer(
                             disableBorder = config.disableFontBorder,
                             rtl = true,
                             lineSpacing = effectiveLineSpacing,
+                            strokeWidth = region.strokeWidth,
                         )
                         continue
                     }
-                    renderHorizontalRtl(canvas, region.translation, rect, paint, fgColor, bgColor, config.disableFontBorder)
+                    renderHorizontalRtl(canvas, renderText, rect, paint, fgColor, bgColor, config.disableFontBorder, region.strokeWidth)
                     continue
                 }
                 else -> { /* continue with horizontal rendering */ }
             }
 
-            if (region.translation.contains('\n')) {
+            if (renderText.contains('\n')) {
                 renderMultilineHorizontal(
                     canvas = canvas,
-                    text = region.translation,
+                    text = renderText,
                     rect = rect,
                     paint = paint,
                     fgColor = fgColor,
@@ -131,25 +134,23 @@ class HorizontalTextRenderer(
                     disableBorder = config.disableFontBorder,
                     rtl = false,
                     lineSpacing = effectiveLineSpacing,
+                    strokeWidth = region.strokeWidth,
                 )
                 continue
             }
 
             // --- Measure & scale to fit ---
-            var textWidth = paint.measureText(region.translation)
+            var textWidth = paint.measureText(renderText)
             if (textWidth > rect.width() && rect.width() > 0f) {
                 val scaleFactor = rect.width() / textWidth
                 textSize *= scaleFactor
                 paint.textSize = textSize
-                textWidth = paint.measureText(region.translation)
+                textWidth = paint.measureText(renderText)
             }
 
             // --- Alignment ---
-            val effectiveAlignment = when {
-                region.alignment != TextAlignment.AUTO -> region.alignment
-                config.alignment != TextAlignment.AUTO -> config.alignment
-                else -> TextAlignment.LEFT
-            }
+            // Use config override if set, otherwise auto-detected region alignment
+            val effectiveAlignment = if (config.alignment != TextAlignment.AUTO) config.alignment else region.alignment
             val x = when (effectiveAlignment) {
                 TextAlignment.LEFT -> rect.left
                 TextAlignment.CENTER -> rect.centerX() - textWidth / 2f
@@ -164,15 +165,15 @@ class HorizontalTextRenderer(
                 // Two-pass draw for API 28+ compatibility (setStrokeColor is API 29+):
                 // First pass: stroke (border)
                 paint.style = Paint.Style.STROKE
-                paint.strokeWidth = textSize * 0.05f
-                paint.color = region.bgColor ?: Color.WHITE
+                paint.strokeWidth = region.strokeWidth
+                paint.color = bgColor
                 applyRegionTextStyle(paint, region, fgColor, textSize)
-                canvas.drawText(region.translation, x, y, paint)
+                canvas.drawText(renderText, x, y, paint)
             }
             // Second pass: fill (foreground)
             paint.style = Paint.Style.FILL
             applyRegionTextStyle(paint, region, fgColor, textSize)
-            canvas.drawText(region.translation, x, y, paint)
+            canvas.drawText(renderText, x, y, paint)
         }
 
         return result
@@ -190,6 +191,7 @@ class HorizontalTextRenderer(
         fgColor: Int,
         bgColor: Int,
         disableBorder: Boolean,
+        strokeWidth: Float,
     ) {
         var fontSize = paint.textSize
 
@@ -226,9 +228,8 @@ class HorizontalTextRenderer(
                 // Border pass (stroke)
                 if (!disableBorder) {
                     paint.style = Paint.Style.STROKE
-                    paint.strokeWidth = fontSize * 0.05f
+                    paint.strokeWidth = strokeWidth
                     paint.color = bgColor
-                    paint.alpha = paint.alpha
                     canvas.drawText(char, colX, charY, paint)
                 }
                 // Fill pass (foreground)
@@ -255,6 +256,7 @@ class HorizontalTextRenderer(
         fgColor: Int,
         bgColor: Int,
         disableBorder: Boolean,
+        strokeWidth: Float,
     ) {
         // Measure full text width and scale if needed
         var textWidth = paint.measureText(text)
@@ -268,7 +270,7 @@ class HorizontalTextRenderer(
         // Draw right-aligned (RTL)
         if (!disableBorder) {
             paint.style = Paint.Style.STROKE
-            paint.strokeWidth = paint.textSize * 0.05f
+            paint.strokeWidth = strokeWidth
             paint.color = bgColor
             canvas.drawText(text, rect.right - textWidth, y, paint)
         }
@@ -287,6 +289,7 @@ class HorizontalTextRenderer(
         disableBorder: Boolean,
         rtl: Boolean,
         lineSpacing: Float?,
+        strokeWidth: Float,
     ) {
         val lines = text.split('\n').filter { it.isNotBlank() }
         if (lines.isEmpty()) return
@@ -331,7 +334,7 @@ class HorizontalTextRenderer(
 
             if (!disableBorder) {
                 paint.style = Paint.Style.STROKE
-                paint.strokeWidth = paint.textSize * 0.05f
+                paint.strokeWidth = strokeWidth
                 paint.color = bgColor
                 canvas.drawText(line, x, currentY, paint)
             }
@@ -383,7 +386,7 @@ class HorizontalTextRenderer(
         paint.isUnderlineText = region.underline
         paint.isFakeBoldText = region.bold
         paint.textSkewX = if (region.italic && !region.bold) -0.25f else 0f
-        paint.strokeWidth = maxOf(textSize * 0.05f, region.shadowStrength)
+        paint.strokeWidth = region.strokeWidth
 
         if (region.shadowRadius > 0f) {
             paint.setShadowLayer(
