@@ -22,6 +22,7 @@ import com.sakuravillager.manga_translator.translation.data.config.ColorizerType
 import com.sakuravillager.manga_translator.translation.data.config.TranslationConfig
 import com.sakuravillager.manga_translator.translation.data.config.TranslatorType
 import com.sakuravillager.manga_translator.translation.util.resizeBitmap
+import com.sakuravillager.manga_translator.translation.util.VisualizeUtils
 import com.sakuravillager.manga_translator.translation.sort.RegionSorter
 import com.sakuravillager.manga_translator.translation.util.downsampleToMaxSize
 import com.sakuravillager.manga_translator.translation.dict.DictionaryLoader
@@ -182,9 +183,13 @@ class TranslationPipeline(
                 forceSimpleSort = config.forceSimpleSort,
             ).toMutableList()
 
-            // Debug: bboxes.png after textline merge and sorting (placeholder for visualize_textblocks)
+            // Debug: bboxes.png after textline merge and sorting (visualize_textblocks)
             if (config.verbose) {
-                ctx.imgRgb?.let { ctx.debugImages["bboxes.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
+                ctx.debugImages["bboxes.png"] = VisualizeUtils.visualizeTextBlocks(
+                    ctx.imgRgb!!, ctx.textRegions,
+                    showPanels = !config.forceSimpleSort,
+                    rightToLeft = config.renderer.rtl,
+                )
             }
 
             // Apply pre-dictionary (text replacement before translation)
@@ -516,9 +521,13 @@ class TranslationPipeline(
             forceSimpleSort = config.forceSimpleSort,
         ).toMutableList()
 
-        // Debug: bboxes.png after textline merge and sorting (placeholder for visualize_textblocks)
+        // Debug: bboxes.png after textline merge and sorting (visualize_textblocks)
         if (config.verbose) {
-            ctx.imgRgb?.let { ctx.debugImages["bboxes.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
+            ctx.debugImages["bboxes.png"] = VisualizeUtils.visualizeTextBlocks(
+                ctx.imgRgb!!, ctx.textRegions,
+                showPanels = !config.forceSimpleSort,
+                rightToLeft = config.renderer.rtl,
+            )
         }
 
         // Apply pre-dictionary
