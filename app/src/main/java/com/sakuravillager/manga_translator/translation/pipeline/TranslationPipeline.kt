@@ -26,6 +26,7 @@ import com.sakuravillager.manga_translator.translation.util.VisualizeUtils
 import com.sakuravillager.manga_translator.translation.sort.RegionSorter
 import com.sakuravillager.manga_translator.translation.util.downsampleToMaxSize
 import com.sakuravillager.manga_translator.translation.dict.DictionaryLoader
+import com.sakuravillager.manga_translator.translation.mask.BubbleDetector
 import com.sakuravillager.manga_translator.translation.pipeline.RepetitionHallucinationChecker
 import com.sakuravillager.manga_translator.translation.translator.TranslationValidator
 import kotlinx.coroutines.CancellationException
@@ -211,8 +212,16 @@ class TranslationPipeline(
             // Step 7: Mask refinement
             _progress.value = TranslationProgress.Processing("Refining mask...", 0.6f)
             try {
+                // Filter text regions through BubbleDetector — remove non-bubble regions from mask
+                val maskRegions = ctx.textRegions.filter { region ->
+                    !BubbleDetector.isIgnore(region, processingBitmap)
+                }
+                val filteredCount = ctx.textRegions.size - maskRegions.size
+                if (filteredCount > 0) {
+                    Log.i(TAG, "BubbleDetector filtered $filteredCount non-bubble regions from mask refinement")
+                }
                 ctx.refinedMask = maskRefiner.refine(
-                    ctx.textRegions, processingBitmap, ctx.rawMask,
+                    maskRegions, processingBitmap, ctx.rawMask,
                     config.kernelSize, config.maskDilationOffset,
                 )
             } catch (e: Exception) {
@@ -838,8 +847,16 @@ class TranslationPipeline(
         config: TranslationConfig,
     ): TranslationContext {
         // Step 7: Mask refinement
+        // Filter text regions through BubbleDetector — remove non-bubble regions from mask
+        val maskRegions = ctx.textRegions.filter { region ->
+            !BubbleDetector.isIgnore(region, processingBitmap)
+        }
+        val filteredCount = ctx.textRegions.size - maskRegions.size
+        if (filteredCount > 0) {
+            Log.i(TAG, "BubbleDetector filtered $filteredCount non-bubble regions from mask refinement")
+        }
         ctx.refinedMask = maskRefiner.refine(
-            ctx.textRegions, processingBitmap, ctx.rawMask,
+            maskRegions, processingBitmap, ctx.rawMask,
             config.kernelSize, config.maskDilationOffset,
         )
 

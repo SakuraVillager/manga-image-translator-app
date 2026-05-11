@@ -31,6 +31,7 @@ import com.sakuravillager.manga_translator.translation.ocr.ModelMangaOCR
 import com.sakuravillager.manga_translator.translation.pipeline.TranslationPipeline
 import com.sakuravillager.manga_translator.translation.inpaint.AotInpainter
 import com.sakuravillager.manga_translator.translation.inpaint.SimpleFillInpainter
+import com.sakuravillager.manga_translator.translation.mask.CompleteMaskRefiner
 import com.sakuravillager.manga_translator.translation.mask.OpenCVMaskRefiner
 import com.sakuravillager.manga_translator.translation.render.HorizontalTextRenderer
 import com.sakuravillager.manga_translator.translation.upscale.BasicUpscaler
@@ -112,12 +113,13 @@ val translationModule = module {
     single<Upscaler> {
         val config: TranslationConfig = get()
         when (config.upscale.upscaler) {
-            UpscalerType.ESRGAN -> EsrganUpscaler(
+            UpscalerType.BASIC -> BasicUpscaler()
+            UpscalerType.NONE -> BasicUpscaler()
+            else -> EsrganUpscaler(
                 modelDownloadManager = get(),
                 sessionManager = get(),
                 context = androidContext(),
             )
-            else -> BasicUpscaler()
         }
     }
 
@@ -143,7 +145,7 @@ val translationModule = module {
     }
 
     // Real implementations replacing NoOp stubs
-    factory<MaskRefiner> { OpenCVMaskRefiner() }
+    factory<MaskRefiner> { CompleteMaskRefiner() }
     factory<Inpainter> {
         val config: TranslationConfig = get()
         when (config.inpainter.inpainter) {

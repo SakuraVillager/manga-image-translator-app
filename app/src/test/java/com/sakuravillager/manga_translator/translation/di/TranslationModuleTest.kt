@@ -16,7 +16,7 @@ import com.sakuravillager.manga_translator.translation.data.config.OcrConfig
 import com.sakuravillager.manga_translator.translation.data.config.OcrEngineType
 import com.sakuravillager.manga_translator.translation.data.config.TranslationConfig
 import com.sakuravillager.manga_translator.translation.inpaint.SimpleFillInpainter
-import com.sakuravillager.manga_translator.translation.mask.OpenCVMaskRefiner
+import com.sakuravillager.manga_translator.translation.mask.CompleteMaskRefiner
 import com.sakuravillager.manga_translator.translation.merge.DefaultTextlineMerger
 import com.sakuravillager.manga_translator.translation.pipeline.TranslationPipeline
 import com.sakuravillager.manga_translator.translation.render.HorizontalTextRenderer
@@ -99,9 +99,9 @@ class TranslationModuleTest : KoinTest {
     }
 
     @Test
-    fun `resolve MaskRefiner returns OpenCVMaskRefiner`() {
+    fun `resolve MaskRefiner returns CompleteMaskRefiner`() {
         val refiner = get<MaskRefiner>()
-        assertTrue(refiner is OpenCVMaskRefiner)
+        assertTrue(refiner is CompleteMaskRefiner)
     }
 
     @Test
