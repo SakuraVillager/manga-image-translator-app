@@ -10,6 +10,7 @@ import com.sakuravillager.manga_translator.translation.api.TextRenderer
 import com.sakuravillager.manga_translator.translation.api.TextlineMerger
 import com.sakuravillager.manga_translator.translation.api.Translator
 import com.sakuravillager.manga_translator.translation.colorize.BasicColorizer
+import com.sakuravillager.manga_translator.translation.colorize.Mc2Colorizer
 import com.sakuravillager.manga_translator.translation.data.config.DetectorType
 import com.sakuravillager.manga_translator.translation.data.config.ColorizerType
 import com.sakuravillager.manga_translator.translation.data.config.InpainterType
@@ -33,6 +34,7 @@ import com.sakuravillager.manga_translator.translation.inpaint.SimpleFillInpaint
 import com.sakuravillager.manga_translator.translation.mask.OpenCVMaskRefiner
 import com.sakuravillager.manga_translator.translation.render.HorizontalTextRenderer
 import com.sakuravillager.manga_translator.translation.upscale.BasicUpscaler
+import com.sakuravillager.manga_translator.translation.upscale.EsrganUpscaler
 import com.sakuravillager.manga_translator.translation.stub.NoOpInpainter
 import com.sakuravillager.manga_translator.translation.stub.NoOpMaskRefiner
 import com.sakuravillager.manga_translator.translation.stub.NoOpTextDetector
@@ -50,6 +52,11 @@ import com.sakuravillager.manga_translator.translation.translator.GptTranslator
 import com.sakuravillager.manga_translator.translation.translator.MBart50Translator
 import com.sakuravillager.manga_translator.translation.translator.Qwen2BigTranslator
 import com.sakuravillager.manga_translator.translation.translator.Qwen2Translator
+import com.sakuravillager.manga_translator.translation.translator.NllbTranslator
+import com.sakuravillager.manga_translator.translation.translator.NllbBigTranslator
+import com.sakuravillager.manga_translator.translation.translator.SugoiTranslator
+import com.sakuravillager.manga_translator.translation.translator.JparacrawlTranslator
+import com.sakuravillager.manga_translator.translation.translator.JparacrawlBigTranslator
 import com.sakuravillager.manga_translator.translation.translator.TranslatorStep
 import com.sakuravillager.manga_translator.data.preferences.PreferencesProvider
 import com.sakuravillager.manga_translator.translation.config.TranslationConfigMapper
@@ -90,9 +97,29 @@ val translationModule = module {
     // TextlineMerger — always DefaultTextlineMerger (pure algorithm, no model dependency)
     single<TextlineMerger> { DefaultTextlineMerger() }
 
-    // Pre-processing modules — lightweight defaults with optional config control
-    single<Colorizer> { BasicColorizer() }
-    single<Upscaler> { BasicUpscaler() }
+    // Pre-processing modules — config-driven selection
+    single<Colorizer> {
+        val config: TranslationConfig = get()
+        when (config.colorizer.colorizer) {
+            ColorizerType.MC2 -> Mc2Colorizer(
+                modelDownloadManager = get(),
+                sessionManager = get(),
+                context = androidContext(),
+            )
+            else -> BasicColorizer()
+        }
+    }
+    single<Upscaler> {
+        val config: TranslationConfig = get()
+        when (config.upscale.upscaler) {
+            UpscalerType.ESRGAN -> EsrganUpscaler(
+                modelDownloadManager = get(),
+                sessionManager = get(),
+                context = androidContext(),
+            )
+            else -> BasicUpscaler()
+        }
+    }
 
     // Translator — conditional injection based on TranslatorType
     single<Translator> {
@@ -223,6 +250,29 @@ private fun createTranslator(
         )
         // MBart50 multilingual encoder-decoder ONNX translator
         TranslatorType.MBART50 -> MBart50Translator(
+            modelDownloadManager = modelDownloadManager,
+            onnxSessionManager = onnxSessionManager,
+        )
+        // NLLB encoder-decoder ONNX translators
+        TranslatorType.NLLB -> NllbTranslator(
+            modelDownloadManager = modelDownloadManager,
+            onnxSessionManager = onnxSessionManager,
+        )
+        TranslatorType.NLLB_BIG -> NllbBigTranslator(
+            modelDownloadManager = modelDownloadManager,
+            onnxSessionManager = onnxSessionManager,
+        )
+        // Sugoi V4 ONNX translator (manga-specialized JPN→ENG)
+        TranslatorType.SUGOI -> SugoiTranslator(
+            modelDownloadManager = modelDownloadManager,
+            onnxSessionManager = onnxSessionManager,
+        )
+        // JParaCrawl ONNX translators (JPN↔ENG general-purpose)
+        TranslatorType.JPARACRAWL -> JparacrawlTranslator(
+            modelDownloadManager = modelDownloadManager,
+            onnxSessionManager = onnxSessionManager,
+        )
+        TranslatorType.JPARACRAWL_BIG -> JparacrawlBigTranslator(
             modelDownloadManager = modelDownloadManager,
             onnxSessionManager = onnxSessionManager,
         )
