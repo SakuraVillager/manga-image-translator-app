@@ -269,4 +269,117 @@ class TranslatorDispatchTest {
         val result = dispatch("ORIGINAL:ENG", listOf("hello", "world"), TranslatorConfig())
         assertEquals(listOf("hello", "world"), result)
     }
+
+    // ─── isOfflineTranslator ─────────────────────────────────────────
+
+    @Test
+    fun `isOfflineTranslator returns true for NLLB`() {
+        assertTrue(isOfflineTranslator(TranslatorType.NLLB))
+    }
+
+    @Test
+    fun `isOfflineTranslator returns true for NLLB_BIG`() {
+        assertTrue(isOfflineTranslator(TranslatorType.NLLB_BIG))
+    }
+
+    @Test
+    fun `isOfflineTranslator returns true for SUGOI`() {
+        assertTrue(isOfflineTranslator(TranslatorType.SUGOI))
+    }
+
+    @Test
+    fun `isOfflineTranslator returns true for JPARACRAWL`() {
+        assertTrue(isOfflineTranslator(TranslatorType.JPARACRAWL))
+    }
+
+    @Test
+    fun `isOfflineTranslator returns true for JPARACRAWL_BIG`() {
+        assertTrue(isOfflineTranslator(TranslatorType.JPARACRAWL_BIG))
+    }
+
+    @Test
+    fun `isOfflineTranslator returns true for M2M100`() {
+        assertTrue(isOfflineTranslator(TranslatorType.M2M100))
+    }
+
+    @Test
+    fun `isOfflineTranslator returns true for M2M100_BIG`() {
+        assertTrue(isOfflineTranslator(TranslatorType.M2M100_BIG))
+    }
+
+    @Test
+    fun `isOfflineTranslator returns true for MBART50`() {
+        assertTrue(isOfflineTranslator(TranslatorType.MBART50))
+    }
+
+    @Test
+    fun `isOfflineTranslator returns true for QWEN2`() {
+        assertTrue(isOfflineTranslator(TranslatorType.QWEN2))
+    }
+
+    @Test
+    fun `isOfflineTranslator returns true for QWEN2_BIG`() {
+        assertTrue(isOfflineTranslator(TranslatorType.QWEN2_BIG))
+    }
+
+    @Test
+    fun `isOfflineTranslator returns false for GPT_COMPATIBLE`() {
+        assertFalse(isOfflineTranslator(TranslatorType.GPT_COMPATIBLE))
+    }
+
+    @Test
+    fun `isOfflineTranslator returns false for DEEPL`() {
+        assertFalse(isOfflineTranslator(TranslatorType.DEEPL))
+    }
+
+    @Test
+    fun `isOfflineTranslator returns false for NONE`() {
+        assertFalse(isOfflineTranslator(TranslatorType.NONE))
+    }
+
+    // ─── createTranslator for new types falls back gracefully ────────
+
+    @Test
+    fun `createTranslator falls back to NoOpTranslator for NLLB`() {
+        val translator = createTranslator(TranslatorType.NLLB)
+        assertTrue("Expected NoOpTranslator fallback", translator is NoOpTranslator)
+    }
+
+    @Test
+    fun `createTranslator falls back to NoOpTranslator for SUGOI`() {
+        val translator = createTranslator(TranslatorType.SUGOI)
+        assertTrue("Expected NoOpTranslator fallback", translator is NoOpTranslator)
+    }
+
+    @Test
+    fun `createTranslator falls back to NoOpTranslator for M2M100`() {
+        val translator = createTranslator(TranslatorType.M2M100)
+        assertTrue("Expected NoOpTranslator fallback", translator is NoOpTranslator)
+    }
+
+    @Test
+    fun `createTranslator falls back to NoOpTranslator for QWEN2`() {
+        val translator = createTranslator(TranslatorType.QWEN2)
+        assertTrue("Expected NoOpTranslator fallback", translator is NoOpTranslator)
+    }
+
+    // ─── parseChain with new types ───────────────────────────────────
+
+    @Test
+    fun `parseChain handles new offline translator types`() {
+        val result = parseChain("NLLB:ENG;SUGOI:CHS")
+        assertEquals(2, result.size)
+        assertEquals(TranslatorType.NLLB, result[0].translatorType)
+        assertEquals("ENG", result[0].targetLanguage)
+        assertEquals(TranslatorType.SUGOI, result[1].translatorType)
+        assertEquals("CHS", result[1].targetLanguage)
+    }
+
+    @Test
+    fun `dispatch with new offline translator type falls back gracefully`() = runTest {
+        val queries = listOf("hello", "world")
+        // NLLB is not yet implemented → NoOpTranslator returns empty strings
+        val result = dispatch("NLLB:ENG", queries, TranslatorConfig())
+        assertEquals(listOf("", ""), result)
+    }
 }

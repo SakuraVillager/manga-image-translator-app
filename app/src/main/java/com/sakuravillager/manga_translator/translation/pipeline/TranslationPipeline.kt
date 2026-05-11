@@ -1,6 +1,10 @@
 package com.sakuravillager.manga_translator.translation.pipeline
 
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Path
 import android.util.Log
 import com.sakuravillager.manga_translator.translation.api.Colorizer
 import com.sakuravillager.manga_translator.translation.api.Inpainter
@@ -49,6 +53,11 @@ class TranslationPipeline(
 
     private val pageHistoryLock = Any()
     private val pageHistory = ArrayDeque<Map<String, String>>()
+
+    /** Pre-compiled regex from config.filterText (matches Python's config.re_filter_text). */
+    private val filterTextRegex: Regex? by lazy {
+        config.filterText?.let { Regex(it) }
+    }
 
     private val _progress = MutableStateFlow<TranslationProgress>(TranslationProgress.Idle)
     val progress: StateFlow<TranslationProgress> = _progress.asStateFlow()
@@ -101,6 +110,11 @@ class TranslationPipeline(
             ctx.originalBitmap = if (processingBitmap !== inputBitmap) inputBitmap else null
             ctx.imgRgb = processingBitmap
 
+            // Debug: input.png - after preprocessing (colorize + upscale + downsample)
+            if (config.verbose) {
+                ctx.debugImages["input.png"] = processingBitmap.copy(Bitmap.Config.ARGB_8888, false)
+            }
+
             // Step 3: Detection
             _progress.value = TranslationProgress.Processing("Detecting text...", 0.1f)
             try {
@@ -112,6 +126,11 @@ class TranslationPipeline(
                 if (!config.ignoreErrors) throw e
                 ctx.textlines = mutableListOf()
                 ctx.rawMask = null
+            }
+            // Debug: mask_raw.png and bboxes_unfiltered.png after detection
+            if (config.verbose) {
+                ctx.rawMask?.let { ctx.debugImages["mask_raw.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
+                ctx.imgRgb?.let { ctx.debugImages["bboxes_unfiltered.png"] = drawQuadrilaterals(it, ctx.textlines) }
             }
             if (ctx.textlines.isEmpty()) {
                 Log.i("TranslationPipeline", "NoText after detection: detector=${detector.name}, image=${processingBitmap.width}x${processingBitmap.height}")
@@ -158,8 +177,13 @@ class TranslationPipeline(
                 ctx.textRegions,
                 rightToLeft = config.renderer.rtl,
                 image = processingBitmap,
-                forceSimpleSort = false,
+                forceSimpleSort = config.forceSimpleSort,
             ).toMutableList()
+
+            // Debug: bboxes.png after textline merge and sorting (placeholder for visualize_textblocks)
+            if (config.verbose) {
+                ctx.imgRgb?.let { ctx.debugImages["bboxes.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
+            }
 
             // Apply pre-dictionary (text replacement before translation)
             ctx.textRegions = applyPreDictionary(ctx.textRegions, config).toMutableList()
@@ -190,6 +214,14 @@ class TranslationPipeline(
                 ctx.refinedMask = ctx.rawMask ?: Bitmap.createBitmap(processingBitmap.width, processingBitmap.height, Bitmap.Config.ARGB_8888).apply { eraseColor(0) }
             }
 
+            // Debug: mask_final.png and inpaint_input.png after mask refinement
+            if (config.verbose) {
+                ctx.refinedMask?.let { ctx.debugImages["mask_final.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
+                if (ctx.imgRgb != null && ctx.refinedMask != null) {
+                    ctx.debugImages["inpaint_input.png"] = createMaskOverlay(ctx.imgRgb!!, ctx.refinedMask!!)
+                }
+            }
+
             // Step 8: Inpainting
             _progress.value = TranslationProgress.Processing("Inpainting...", 0.7f)
             try {
@@ -202,6 +234,11 @@ class TranslationPipeline(
                 ctx.gimpMask = processingBitmap
             }
 
+            // Debug: inpainted.png after inpainting
+            if (config.verbose) {
+                ctx.imgInpainted?.let { ctx.debugImages["inpainted.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
+            }
+
             // Step 9: Rendering
             _progress.value = TranslationProgress.Processing("Rendering text...", 0.85f)
             try {
@@ -211,6 +248,11 @@ class TranslationPipeline(
                 Log.e(TAG, "Error during rendering: ${e.message}", e)
                 if (!config.ignoreErrors) throw e
                 ctx.imgRendered = ctx.imgInpainted
+            }
+
+            // Debug: final.png after rendering
+            if (config.verbose) {
+                ctx.imgRendered?.let { ctx.debugImages["final.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
             }
 
             if (config.upscale.revertUpscaling && processingBitmap !== inputBitmap) {
@@ -427,10 +469,20 @@ class TranslationPipeline(
         ctx.originalBitmap = if (processingBitmap !== inputBitmap) inputBitmap else null
         ctx.imgRgb = processingBitmap
 
+        // Debug: input.png after preprocessing
+        if (config.verbose) {
+            ctx.debugImages["input.png"] = processingBitmap.copy(Bitmap.Config.ARGB_8888, false)
+        }
+
         // Step 3: Detection
         val detectionResult = detector.detect(processingBitmap, config.detector)
         ctx.textlines = detectionResult.textlines.toMutableList()
         ctx.rawMask = detectionResult.rawMask
+        // Debug: mask_raw.png and bboxes_unfiltered.png after detection
+        if (config.verbose) {
+            ctx.rawMask?.let { ctx.debugImages["mask_raw.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
+            ctx.imgRgb?.let { ctx.debugImages["bboxes_unfiltered.png"] = drawQuadrilaterals(it, ctx.textlines) }
+        }
         if (ctx.textlines.isEmpty()) {
             Log.i(TAG, "NoText after detection: detector=${detector.name}, image=${processingBitmap.width}x${processingBitmap.height}")
             return ctx  // caller checks ctx.textlines.isEmpty()
@@ -459,8 +511,13 @@ class TranslationPipeline(
             ctx.textRegions,
             rightToLeft = config.renderer.rtl,
             image = processingBitmap,
-            forceSimpleSort = false,
+            forceSimpleSort = config.forceSimpleSort,
         ).toMutableList()
+
+        // Debug: bboxes.png after textline merge and sorting (placeholder for visualize_textblocks)
+        if (config.verbose) {
+            ctx.imgRgb?.let { ctx.debugImages["bboxes.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
+        }
 
         // Apply pre-dictionary
         ctx.textRegions = applyPreDictionary(ctx.textRegions, config).toMutableList()
@@ -775,13 +832,33 @@ class TranslationPipeline(
             config.kernelSize, config.maskDilationOffset,
         )
 
+        // Debug: mask_final.png and inpaint_input.png after mask refinement
+        if (config.verbose) {
+            ctx.refinedMask?.let { ctx.debugImages["mask_final.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
+            ctx.imgRgb?.let { img ->
+                ctx.refinedMask?.let { mask ->
+                    ctx.debugImages["inpaint_input.png"] = createMaskOverlay(img, mask)
+                }
+            }
+        }
+
         // Step 8: Inpainting
         ctx.imgInpainted = inpainter.inpaint(processingBitmap, ctx.refinedMask!!, config.inpainter)
         ctx.gimpMask = ctx.imgInpainted
 
+        // Debug: inpainted.png after inpainting
+        if (config.verbose) {
+            ctx.imgInpainted?.let { ctx.debugImages["inpainted.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
+        }
+
         // Step 9: Rendering
         val safeInpainted = ctx.imgInpainted?.copy(Bitmap.Config.ARGB_8888, false) ?: ctx.imgInpainted
         ctx.imgRendered = renderer.render(safeInpainted!!, ctx.textRegions, config.renderer)
+
+        // Debug: final.png after rendering
+        if (config.verbose) {
+            ctx.imgRendered?.let { ctx.debugImages["final.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
+        }
 
         // Revert upscale if needed
         if (config.upscale.revertUpscaling && processingBitmap !== inputBitmap) {
@@ -943,7 +1020,7 @@ class TranslationPipeline(
                     Log.i(TAG, "Reason: translation is all digits")
                     return@filter false
                 }
-                if (config.filterText != null && Regex(config.filterText).containsMatchIn(translation)) {
+                if (filterTextRegex != null && filterTextRegex!!.containsMatchIn(translation)) {
                     Log.i(TAG, "Filtered out: $translation")
                     Log.i(TAG, "Reason: matches filterText=${config.filterText}")
                     return@filter false
@@ -965,6 +1042,77 @@ class TranslationPipeline(
                 language = if (sourceLanguage == "UNKNOWN") region.language else sourceLanguage,
             )
         }
+    }
+
+    /**
+     * Draws quadrilateral textline bounding boxes as red polylines on a copy of the image.
+     * Used for bboxes_unfiltered debug image.
+     */
+    private fun drawQuadrilaterals(image: Bitmap, quads: List<Quadrilateral>): Bitmap {
+        val copy = image.copy(Bitmap.Config.ARGB_8888, true)
+        val canvas = Canvas(copy)
+        val paint = Paint().apply {
+            color = Color.RED
+            style = Paint.Style.STROKE
+            strokeWidth = 2f
+            isAntiAlias = true
+        }
+        for (quad in quads) {
+            if (quad.points.size >= 4) {
+                val path = Path()
+                path.moveTo(quad.points[0].x, quad.points[0].y)
+                for (i in 1 until quad.points.size) {
+                    path.lineTo(quad.points[i].x, quad.points[i].y)
+                }
+                path.close()
+                canvas.drawPath(path, paint)
+            }
+        }
+        return copy
+    }
+
+    /**
+     * Creates a semi-transparent red overlay on masked regions of the image.
+     * Used for inpaint_input debug image.
+     */
+    private fun createMaskOverlay(image: Bitmap, mask: Bitmap): Bitmap {
+        val result = image.copy(Bitmap.Config.ARGB_8888, true)
+        val canvas = Canvas(result)
+
+        val scaledMask = if (mask.width != image.width || mask.height != image.height) {
+            Bitmap.createScaledBitmap(mask, image.width, image.height, true)
+        } else {
+            mask
+        }
+
+        val width = scaledMask.width
+        val height = scaledMask.height
+        val maskPixels = IntArray(width * height)
+        scaledMask.getPixels(maskPixels, 0, width, 0, 0, width, height)
+
+        // Create overlay: semi-transparent red for white (masked) pixels
+        val overlayPixels = IntArray(width * height) { i ->
+            val pixel = maskPixels[i]
+            val r = (pixel shr 16) and 0xFF
+            val g = (pixel shr 8) and 0xFF
+            val b = pixel and 0xFF
+            val gray = (r + g + b) / 3
+            if (gray > 10) {
+                Color.argb((gray * 0.6f).toInt().coerceIn(0, 180), 255, 0, 0)
+            } else {
+                0 // fully transparent
+            }
+        }
+
+        val overlay = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        overlay.setPixels(overlayPixels, 0, width, 0, 0, width, height)
+
+        canvas.drawBitmap(overlay, 0f, 0f, null)
+        overlay.recycle()
+
+        if (scaledMask !== mask) scaledMask.recycle()
+
+        return result
     }
 
     private fun String.isAscii(): Boolean = all { it.code < 128 }

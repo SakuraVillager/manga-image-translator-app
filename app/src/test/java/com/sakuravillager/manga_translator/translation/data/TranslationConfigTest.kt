@@ -37,6 +37,7 @@ class TranslationConfigTest {
         assertNull(config.filterText)
         assertNull(config.preDictPath)
         assertNull(config.postDictPath)
+        assertFalse(config.forceSimpleSort)
     }
 
     @Test
@@ -88,6 +89,8 @@ class TranslationConfigTest {
         assertEquals(OcrEngineType.MODEL_48PX, config.ocrEngine)
         assertEquals(0, config.minTextLength)
         assertEquals(0, config.ignoreBubble)
+        assertNull(config.prob)
+        assertFalse(config.useMocrMerge)
     }
 
     // ── InpainterConfig ────────────────────────────────────────────
@@ -163,8 +166,8 @@ class TranslationConfigTest {
     // ── TranslatorType enum ────────────────────────────────────────
 
     @Test
-    fun translatorTypeEnumHasSixValues() {
-        assertEquals(6, TranslatorType.values().size)
+    fun translatorTypeEnumHasSixteenValues() {
+        assertEquals(16, TranslatorType.values().size)
     }
 
     @Test
@@ -176,7 +179,17 @@ class TranslationConfigTest {
             TranslatorType.BAIDU,
             TranslatorType.YOUDAO,
             TranslatorType.NONE,
-            TranslatorType.ORIGINAL
+            TranslatorType.ORIGINAL,
+            TranslatorType.NLLB,
+            TranslatorType.NLLB_BIG,
+            TranslatorType.SUGOI,
+            TranslatorType.JPARACRAWL,
+            TranslatorType.JPARACRAWL_BIG,
+            TranslatorType.M2M100,
+            TranslatorType.M2M100_BIG,
+            TranslatorType.MBART50,
+            TranslatorType.QWEN2,
+            TranslatorType.QWEN2_BIG,
         )
     }
 

@@ -61,6 +61,73 @@ fun createTranslator(type: TranslatorType): Translator = when (type) {
         Log.w(TAG, "Youdao translator is not yet implemented, falling back to NONE")
         NoOpTranslator()
     }
+    // Wave 2 offline translators — placeholder stubs
+    TranslatorType.NLLB -> {
+        Log.w(TAG, "NLLB translator is not yet implemented, falling back to NONE")
+        NoOpTranslator()
+    }
+    TranslatorType.NLLB_BIG -> {
+        Log.w(TAG, "NLLB_BIG translator is not yet implemented, falling back to NONE")
+        NoOpTranslator()
+    }
+    TranslatorType.SUGOI -> {
+        Log.w(TAG, "SUGOI translator is not yet implemented, falling back to NONE")
+        NoOpTranslator()
+    }
+    TranslatorType.JPARACRAWL -> {
+        Log.w(TAG, "JPARACRAWL translator is not yet implemented, falling back to NONE")
+        NoOpTranslator()
+    }
+    TranslatorType.JPARACRAWL_BIG -> {
+        Log.w(TAG, "JPARACRAWL_BIG translator is not yet implemented, falling back to NONE")
+        NoOpTranslator()
+    }
+    TranslatorType.M2M100 -> {
+        Log.w(TAG, "M2M100 translator is not yet implemented, falling back to NONE")
+        NoOpTranslator()
+    }
+    TranslatorType.M2M100_BIG -> {
+        Log.w(TAG, "M2M100_BIG translator is not yet implemented, falling back to NONE")
+        NoOpTranslator()
+    }
+    TranslatorType.MBART50 -> {
+        Log.w(TAG, "MBART50 translator is not yet implemented, falling back to NONE")
+        NoOpTranslator()
+    }
+    TranslatorType.QWEN2 -> {
+        Log.w(TAG, "QWEN2 translator is not yet implemented, falling back to NONE")
+        NoOpTranslator()
+    }
+    TranslatorType.QWEN2_BIG -> {
+        Log.w(TAG, "QWEN2_BIG translator is not yet implemented, falling back to NONE")
+        NoOpTranslator()
+    }
+    else -> {
+        Log.w(TAG, "$type translator is not yet implemented, falling back to NONE")
+        NoOpTranslator()
+    }
+}
+
+/**
+ * Returns true if the given [type] corresponds to an offline / local-model translator.
+ *
+ * Used to determine whether special load/unload lifecycle management is needed
+ * for the translator instance. All new ML model translators (NLLB, Sugoi, etc.)
+ * are offline translators.
+ */
+fun isOfflineTranslator(type: TranslatorType): Boolean = when (type) {
+    TranslatorType.NLLB,
+    TranslatorType.NLLB_BIG,
+    TranslatorType.SUGOI,
+    TranslatorType.JPARACRAWL,
+    TranslatorType.JPARACRAWL_BIG,
+    TranslatorType.M2M100,
+    TranslatorType.M2M100_BIG,
+    TranslatorType.MBART50,
+    TranslatorType.QWEN2,
+    TranslatorType.QWEN2_BIG -> true
+    // Existing translators are all online / API-based
+    else -> false
 }
 
 /**

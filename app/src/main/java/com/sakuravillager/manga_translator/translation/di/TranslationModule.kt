@@ -17,6 +17,7 @@ import com.sakuravillager.manga_translator.translation.data.config.OcrEngineType
 import com.sakuravillager.manga_translator.translation.data.config.TranslationConfig
 import com.sakuravillager.manga_translator.translation.data.config.UpscalerType
 import com.sakuravillager.manga_translator.translation.detection.CtdTextDetector
+import com.sakuravillager.manga_translator.translation.detection.DetectorDispatch
 import com.sakuravillager.manga_translator.translation.merge.DefaultTextlineMerger
 import com.sakuravillager.manga_translator.translation.model.ModelDownloadManager
 import com.sakuravillager.manga_translator.translation.ocr.Model48pxTextRecognizer
@@ -67,7 +68,10 @@ val translationModule = module {
     single<TextDetector> {
         val config: TranslationConfig = get()
         when (config.detector.detector) {
-            DetectorType.CTD -> CtdTextDetector(get(), get(), androidContext())
+            DetectorType.CTD -> {
+                CtdTextDetector.initialize(get(), get(), androidContext())
+                DetectorDispatch.getDetector(DetectorType.CTD) as TextDetector
+            }
             else -> NoOpTextDetector()
         }
     }
@@ -183,10 +187,8 @@ private fun createTranslator(
     return when (translatorType) {
         TranslatorType.GPT_COMPATIBLE -> GptTranslator(httpClient)
         TranslatorType.DEEPL -> DeeplTranslator(httpClient)
-        TranslatorType.NONE -> NoOpTranslator()
-        TranslatorType.ORIGINAL -> OriginalTranslator()
-        // BAIDU, YOUDAO — keep NoOp stubs for now
-        else -> NoOpTranslator()
+        // New offline translators delegate to TranslatorDispatch (no httpClient needed)
+        else -> com.sakuravillager.manga_translator.translation.translator.createTranslator(translatorType)
     }
 }
 

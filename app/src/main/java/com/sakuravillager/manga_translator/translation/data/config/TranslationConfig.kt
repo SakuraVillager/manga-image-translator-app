@@ -18,4 +18,6 @@ data class TranslationConfig(
     val postCheckRepetitionThreshold: Int = 20,
     val postCheckTargetLangThreshold: Float = 0.5f,
     val ignoreErrors: Boolean = false,
+    val forceSimpleSort: Boolean = false,
+    val verbose: Boolean = false,
 )
