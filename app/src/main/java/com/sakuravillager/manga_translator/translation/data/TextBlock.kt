@@ -7,6 +7,7 @@ import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.abs
 import kotlin.math.sqrt
+import kotlin.math.roundToInt
 import android.graphics.Bitmap
 import org.opencv.android.Utils
 import org.opencv.core.Core
@@ -113,9 +114,7 @@ data class TextBlock(
         }
         return bulletTypeIndex >= 0
     }
-    private var _alignment: TextAlignment = TextAlignment.AUTO
     val alignment: TextAlignment get() {
-        if (_alignment != TextAlignment.AUTO) return _alignment
         if (lines.size == 1) return TextAlignment.CENTER
         if (direction == TextDirection.HORIZONTAL) return TextAlignment.CENTER
         if (direction == TextDirection.HORIZONTAL_RTL) return TextAlignment.RIGHT
@@ -199,15 +198,15 @@ data class TextBlock(
     }
 
     fun updateFontColors(fg: Int, bg: Int) {
-        val n = lines.size.coerceAtLeast(1)
-        val rFg = ((_fgColor shr 16) and 0xFF) + (((fg shr 16) and 0xFF) / n)
-        val gFg = ((_fgColor shr 8) and 0xFF) + (((fg shr 8) and 0xFF) / n)
-        val bFg = (_fgColor and 0xFF) + ((fg and 0xFF) / n)
-        _fgColor = (rFg.coerceIn(0, 255) shl 16) or (gFg.coerceIn(0, 255) shl 8) or bFg.coerceIn(0, 255)
-        val rBg = ((_bgColor shr 16) and 0xFF) + (((bg shr 16) and 0xFF) / n)
-        val gBg = ((_bgColor shr 8) and 0xFF) + (((bg shr 8) and 0xFF) / n)
-        val bBg = (_bgColor and 0xFF) + ((bg and 0xFF) / n)
-        _bgColor = (rBg.coerceIn(0, 255) shl 16) or (gBg.coerceIn(0, 255) shl 8) or bBg.coerceIn(0, 255)
+        val n = lines.size.coerceAtLeast(1).toFloat()
+        fun addColor(acc: Int, new: Int): Int {
+            val r = ((acc shr 16) and 0xFF) + ((((new shr 16) and 0xFF) / n).roundToInt())
+            val g = ((acc shr 8) and 0xFF) + ((((new shr 8) and 0xFF) / n).roundToInt())
+            val b = (acc and 0xFF) + (((new and 0xFF) / n).roundToInt())
+            return (r.coerceIn(0, 255) shl 16) or (g.coerceIn(0, 255) shl 8) or b.coerceIn(0, 255)
+        }
+        _fgColor = addColor(_fgColor, fg)
+        _bgColor = addColor(_bgColor, bg)
     }
 
     fun getFontColors(bgr: Boolean = false): Pair<Int, Int> {
@@ -250,15 +249,45 @@ data class TextBlock(
     }
 
     private fun colorDifference(rgb1: Int, rgb2: Int): Float {
-        val r1 = (rgb1 shr 16) and 0xFF
-        val g1 = (rgb1 shr 8) and 0xFF
-        val b1 = rgb1 and 0xFF
-        val r2 = (rgb2 shr 16) and 0xFF
-        val g2 = (rgb2 shr 8) and 0xFF
-        val b2 = rgb2 and 0xFF
-        return Math.sqrt(
-            ((r1 - r2) * (r1 - r2) + (g1 - g2) * (g1 - g2) + (b1 - b2) * (b1 - b2)).toDouble()
-        ).toFloat()
+        val mat1 = Mat(1, 1, CvType.CV_8UC3)
+        val mat2 = Mat(1, 1, CvType.CV_8UC3)
+        val lab1 = Mat()
+        val lab2 = Mat()
+        try {
+            mat1.put(0, 0, byteArrayOf(
+                ((rgb1 shr 16) and 0xFF).toByte(),
+                ((rgb1 shr 8) and 0xFF).toByte(),
+                (rgb1 and 0xFF).toByte(),
+            ))
+            mat2.put(0, 0, byteArrayOf(
+                ((rgb2 shr 16) and 0xFF).toByte(),
+                ((rgb2 shr 8) and 0xFF).toByte(),
+                (rgb2 and 0xFF).toByte(),
+            ))
+            Imgproc.cvtColor(mat1, lab1, Imgproc.COLOR_RGB2Lab)
+            Imgproc.cvtColor(mat2, lab2, Imgproc.COLOR_RGB2Lab)
+
+            val buf1 = ByteArray(3)
+            val buf2 = ByteArray(3)
+            lab1.get(0, 0, buf1)
+            lab2.get(0, 0, buf2)
+
+            val l1 = (buf1[0].toInt() and 0xFF).toFloat()
+            val a1 = (buf1[1].toInt() and 0xFF).toFloat()
+            val b1 = (buf1[2].toInt() and 0xFF).toFloat()
+            val l2 = (buf2[0].toInt() and 0xFF).toFloat()
+            val a2 = (buf2[1].toInt() and 0xFF).toFloat()
+            val b2 = (buf2[2].toInt() and 0xFF).toFloat()
+
+            // L* channel weight 0.392 (matching Python generic2.py:16)
+            val dl = (l1 - l2) * 0.392f
+            val da = a1 - a2
+            val db = b1 - b2
+            return sqrt(dl * dl + da * da + db * db).toFloat()
+        } finally {
+            mat1.release(); mat2.release()
+            lab1.release(); lab2.release()
+        }
     }
 
     fun getTransformedRegion(
