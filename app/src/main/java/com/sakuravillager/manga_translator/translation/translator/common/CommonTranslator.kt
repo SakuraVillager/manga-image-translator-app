@@ -1,6 +1,7 @@
 package com.sakuravillager.manga_translator.translation.translator.common
 
 import android.util.Log
+import com.sakuravillager.manga_translator.translation.api.InfererModule
 import com.sakuravillager.manga_translator.translation.api.Translator
 import com.sakuravillager.manga_translator.translation.data.config.TranslatorConfig
 import kotlinx.coroutines.delay
@@ -13,7 +14,7 @@ import kotlinx.coroutines.delay
  * API / model call.  All retry logic, rate limiting, output cleaning,
  * and MTPE dispatch is handled here.
  */
-abstract class CommonTranslator : Translator {
+abstract class CommonTranslator : InfererModule(), Translator {
 
     // ─── Python class-level constants ───────────────────────────────
 

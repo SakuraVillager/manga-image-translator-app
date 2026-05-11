@@ -2,9 +2,18 @@ package com.sakuravillager.manga_translator.translation.data
 
 import android.graphics.PointF
 import android.graphics.RectF
+import com.sakuravillager.manga_translator.translation.translator.common.TextUtils
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.abs
+import kotlin.math.sqrt
+import android.graphics.Bitmap
+import org.opencv.android.Utils
+import org.opencv.core.Core
+import org.opencv.core.CvType
+import org.opencv.core.Mat
+import org.opencv.core.Size
+import org.opencv.imgproc.Imgproc
 
 data class TextBlock(
     val lines: List<List<PointF>> = emptyList(),
@@ -35,6 +44,9 @@ data class TextBlock(
     val probability: Float = 0f,
     val panelIndex: Int = -1,
 ) {
+    private var _fgColor: Int = fgColor ?: 0
+    private var _bgColor: Int = bgColor ?: 0xFFFFFF
+
     val direction: TextDirection get() {
         // 1. If explicitly set (not AUTO), use it directly
         if (_direction != TextDirection.AUTO) return _direction
@@ -70,6 +82,37 @@ data class TextBlock(
     }
     val isHorizontal: Boolean get() = direction != TextDirection.VERTICAL
     val isVertical: Boolean get() = direction == TextDirection.VERTICAL
+    val isBulletedList: Boolean get() {
+        if (texts.size <= 1) return false
+
+        val bulletRegexes = listOf(
+            Regex("""^[^\w\s]\s*"""),        // Special characters: ○ ● ■ etc.
+            Regex("""^[\d]+\.\s*"""),         // Numbered: 1. 2. etc.
+            Regex("""^[QA]:\s*"""),           // Q: A: etc.
+        )
+
+        var bulletTypeIndex = -1
+        for (lineText in texts) {
+            var matchedIndex = -1
+            for ((i, regex) in bulletRegexes.withIndex()) {
+                if (regex.containsMatchIn(lineText)) {
+                    matchedIndex = i
+                    break
+                }
+            }
+            if (matchedIndex >= 0) {
+                if (bulletTypeIndex < 0) {
+                    bulletTypeIndex = matchedIndex
+                } else if (bulletTypeIndex != matchedIndex) {
+                    return false  // Different bullet types → not a list
+                }
+            } else {
+                // A line without any bullet prefix → not a list
+                return false
+            }
+        }
+        return bulletTypeIndex >= 0
+    }
     private var _alignment: TextAlignment = TextAlignment.AUTO
     val alignment: TextAlignment get() {
         if (_alignment != TextAlignment.AUTO) return _alignment
@@ -150,9 +193,46 @@ data class TextBlock(
         return w / h
     }
 
+    fun setFontColors(fg: Int, bg: Int) {
+        _fgColor = fg
+        _bgColor = bg
+    }
+
+    fun updateFontColors(fg: Int, bg: Int) {
+        val n = lines.size.coerceAtLeast(1)
+        val rFg = ((_fgColor shr 16) and 0xFF) + (((fg shr 16) and 0xFF) / n)
+        val gFg = ((_fgColor shr 8) and 0xFF) + (((fg shr 8) and 0xFF) / n)
+        val bFg = (_fgColor and 0xFF) + ((fg and 0xFF) / n)
+        _fgColor = (rFg.coerceIn(0, 255) shl 16) or (gFg.coerceIn(0, 255) shl 8) or bFg.coerceIn(0, 255)
+        val rBg = ((_bgColor shr 16) and 0xFF) + (((bg shr 16) and 0xFF) / n)
+        val gBg = ((_bgColor shr 8) and 0xFF) + (((bg shr 8) and 0xFF) / n)
+        val bBg = (_bgColor and 0xFF) + ((bg and 0xFF) / n)
+        _bgColor = (rBg.coerceIn(0, 255) shl 16) or (gBg.coerceIn(0, 255) shl 8) or bBg.coerceIn(0, 255)
+    }
+
+    fun getFontColors(bgr: Boolean = false): Pair<Int, Int> {
+        var fg = _fgColor
+        var bg = _bgColor
+        if (bgr) {
+            fg = rgbToBgr(fg)
+            bg = rgbToBgr(bg)
+        }
+        val fgR = (fg shr 16) and 0xFF
+        val fgG = (fg shr 8) and 0xFF
+        val fgB = fg and 0xFF
+        val fgAvg = (fgR + fgG + fgB) / 3
+        if (colorDifference(fg, bg) < 30f) {
+            bg = if (fgAvg <= 127) 0xFFFFFF else 0x000000
+        }
+        return fg to bg
+    }
+
+    private fun rgbToBgr(rgb: Int): Int {
+        return ((rgb and 0xFF) shl 16) or (rgb and 0xFF00) or ((rgb shr 16) and 0xFF)
+    }
+
     val strokeWidth: Float get() {
-        val fg = fgColor ?: 0
-        val bg = bgColor ?: 0xFFFFFF
+        val (fg, bg) = getFontColors()
         val diff = colorDifference(fg, bg)
         return if (diff > 15f) defaultStrokeWidth else 0f
     }
@@ -180,6 +260,170 @@ data class TextBlock(
             ((r1 - r2) * (r1 - r2) + (g1 - g2) * (g1 - g2) + (b1 - b2) * (b1 - b2)).toDouble()
         ).toFloat()
     }
+
+    fun getTransformedRegion(
+        bitmap: Bitmap,
+        lineIndex: Int,
+        textHeight: Int,
+        maxWidth: Int? = null,
+    ): Bitmap {
+        if (lineIndex >= lines.size || textHeight <= 0) {
+            return Bitmap.createBitmap(textHeight.coerceAtLeast(1), textHeight.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+        }
+
+        val line = lines[lineIndex]
+        if (line.size < 4) {
+            return Bitmap.createBitmap(textHeight.coerceAtLeast(1), textHeight.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+        }
+
+        val imW = bitmap.width
+        val imH = bitmap.height
+        val xs = line.map { it.x }; val ys = line.map { it.y }
+        val x1 = xs.min().toInt().coerceIn(0, imW)
+        val y1 = ys.min().toInt().coerceIn(0, imH)
+        val x2 = xs.max().toInt().coerceIn(0, imW)
+        val y2 = ys.max().toInt().coerceIn(0, imH)
+        if (x2 <= x1 || y2 <= y1) {
+            return Bitmap.createBitmap(textHeight.coerceAtLeast(1), textHeight.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+        }
+
+        val cropped = Bitmap.createBitmap(bitmap, x1, y1, x2 - x1, y2 - y1)
+
+        // Convert line points to crop-local coordinates
+        val srcPts = line.map { PointF(it.x - x1, it.y - y1) }
+
+        // Calculate midpoint vectors for direction detection
+        val midTop = PointF((srcPts[0].x + srcPts[3].x) / 2f, (srcPts[0].y + srcPts[3].y) / 2f)
+        val midBottom = PointF((srcPts[1].x + srcPts[2].x) / 2f, (srcPts[1].y + srcPts[2].y) / 2f)
+        val midRight = PointF((srcPts[2].x + srcPts[3].x) / 2f, (srcPts[2].y + srcPts[3].y) / 2f)
+        val midLeft = PointF((srcPts[0].x + srcPts[1].x) / 2f, (srcPts[0].y + srcPts[1].y) / 2f)
+        val vecVx = midBottom.x - midTop.x; val vecVy = midBottom.y - midTop.y
+        val vecHx = midRight.x - midLeft.x; val vecHy = midRight.y - midLeft.y
+        val normV = sqrt(vecVx * vecVx + vecVy * vecVy)
+        val normH = sqrt(vecHx * vecHx + vecHy * vecHy)
+        if (normV <= 0f || normH <= 0f) {
+            return Bitmap.createBitmap(textHeight.coerceAtLeast(1), textHeight.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+        }
+
+        // Determine direction: use direction property to decide vertical/horizontal
+        val useVertical = direction == TextDirection.VERTICAL
+        val ratio = normV / normH
+
+        val safeHeight = textHeight.coerceAtLeast(1)
+        val safeRatio = ratio.coerceAtLeast(0.0001f)
+        val (dstW, dstH) = if (useVertical) {
+            maxOf(safeHeight, 2) to maxOf(kotlin.math.round(safeHeight * safeRatio).toInt(), 2)
+        } else {
+            maxOf(kotlin.math.round(safeHeight / safeRatio).toInt(), 2) to maxOf(safeHeight, 2)
+        }
+
+        // OpenCV perspective transform
+        val srcMat = Mat(4, 2, CvType.CV_32F)
+        val dstMat = Mat(4, 2, CvType.CV_32F)
+        val cropMat = Mat()
+        val warped = Mat()
+
+        try {
+            srcMat.put(0, 0, floatArrayOf(
+                srcPts[0].x, srcPts[0].y,
+                srcPts[1].x, srcPts[1].y,
+                srcPts[2].x, srcPts[2].y,
+                srcPts[3].x, srcPts[3].y,
+            ))
+            dstMat.put(0, 0, floatArrayOf(
+                0f, 0f,
+                (dstW - 1).toFloat(), 0f,
+                (dstW - 1).toFloat(), (dstH - 1).toFloat(),
+                0f, (dstH - 1).toFloat(),
+            ))
+
+            Utils.bitmapToMat(cropped, cropMat)
+            val transform = Imgproc.getPerspectiveTransform(srcMat, dstMat)
+            Imgproc.warpPerspective(cropMat, warped, transform, Size(dstW.toDouble(), dstH.toDouble()))
+            transform.release()
+
+            val output = if (useVertical) {
+                val rotated = Mat()
+                Core.rotate(warped, rotated, Core.ROTATE_90_COUNTERCLOCKWISE)
+                warped.release()
+                val result = Bitmap.createBitmap(rotated.cols(), rotated.rows(), Bitmap.Config.ARGB_8888)
+                Utils.matToBitmap(rotated, result)
+                rotated.release()
+                result
+            } else {
+                val result = Bitmap.createBitmap(warped.cols(), warped.rows(), Bitmap.Config.ARGB_8888)
+                Utils.matToBitmap(warped, result)
+                warped.release()
+                result
+            }
+
+            // Scale down if maxWidth is specified
+            if (maxWidth != null && output.width > maxWidth) {
+                return Bitmap.createScaledBitmap(output, maxWidth, (output.height * maxWidth / output.width).coerceAtLeast(1), true).also { output.recycle() }
+            }
+
+            return output
+        } finally {
+            srcMat.release()
+            dstMat.release()
+            cropMat.release()
+            if (!warped.empty()) warped.release()
+        }
+    }
+
+    fun getTranslationForRendering(): String {
+        if (direction != TextDirection.HORIZONTAL_RTL) return translation
+
+        val textList = translation.toMutableList()
+        var ltrStartIndex = -1
+
+        for (i in textList.indices) {
+            val ch = textList[i]
+            if (!isRightToLeftChar(ch) && isValuableChar(ch)) {
+                if (ltrStartIndex < 0) ltrStartIndex = i
+            } else {
+                if (ltrStartIndex >= 0 && i - ltrStartIndex > 1) {
+                    // Reverse LTR block between ltrStartIndex and i
+                    var left = ltrStartIndex
+                    var right = i - 1
+                    while (left < right) {
+                        val temp = textList[left]
+                        textList[left] = textList[right]
+                        textList[right] = temp
+                        left++; right--
+                    }
+                    ltrStartIndex = -1
+                }
+            }
+        }
+
+        // Handle trailing LTR block
+        if (ltrStartIndex >= 0 && textList.size - ltrStartIndex > 1) {
+            var left = ltrStartIndex
+            var right = textList.size - 1
+            while (left < right) {
+                val temp = textList[left]
+                textList[left] = textList[right]
+                textList[right] = temp
+                left++; right--
+            }
+        }
+
+        return textList.joinToString("")
+    }
+
+    private fun isRightToLeftChar(ch: Char): Boolean {
+        val code = ch.code
+        return (code in 0x0590..0x05FF) ||  // Hebrew
+               (code in 0x0600..0x06FF) ||  // Arabic
+               (code in 0x0750..0x077F) ||  // Arabic Supplement
+               (code in 0x08A0..0x08FF) ||  // Arabic Extended-A
+               (code in 0xFB1D..0xFDFF) ||  // Hebrew/Arabic Presentation Forms
+               (code in 0xFE70..0xFEFF) ||  // Arabic Presentation Forms-B
+               (code in 0x1EE00..0x1EEFF)   // Arabic Mathematical
+    }
+
+    private fun isValuableChar(ch: Char): Boolean = TextUtils.isValuableChar(ch)
 
     companion object {
         const val defaultStrokeWidth: Float = 0.2f
