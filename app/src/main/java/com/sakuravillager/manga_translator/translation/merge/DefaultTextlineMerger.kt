@@ -112,6 +112,22 @@ class DefaultTextlineMerger : TextlineMerger {
         val texts = sorted.map { it.text }
         val text = texts.joinToString("")
 
+        // fg/bg color: mean of all quads (matching Python np.mean)
+        val quadsWithFg = sorted.filter { it.fgColor != null }
+        val avgFg = if (quadsWithFg.isNotEmpty()) {
+            val avgR = quadsWithFg.map { (it.fgColor!! shr 16) and 0xFF }.average().toInt()
+            val avgG = quadsWithFg.map { (it.fgColor!! shr 8) and 0xFF }.average().toInt()
+            val avgB = quadsWithFg.map { it.fgColor!! and 0xFF }.average().toInt()
+            (0xFF shl 24) or (avgR shl 16) or (avgG shl 8) or avgB
+        } else sorted.firstOrNull()?.fgColor
+        val quadsWithBg = sorted.filter { it.bgColor != null }
+        val avgBg = if (quadsWithBg.isNotEmpty()) {
+            val avgR = quadsWithBg.map { (it.bgColor!! shr 16) and 0xFF }.average().toInt()
+            val avgG = quadsWithBg.map { (it.bgColor!! shr 8) and 0xFF }.average().toInt()
+            val avgB = quadsWithBg.map { it.bgColor!! and 0xFF }.average().toInt()
+            (0xFF shl 24) or (avgR shl 16) or (avgG shl 8) or avgB
+        } else sorted.firstOrNull()?.bgColor
+
         return TextBlock(
             lines = sorted.map { it.points },
             texts = texts,
@@ -120,8 +136,8 @@ class DefaultTextlineMerger : TextlineMerger {
             fontSize = fontSize,
             angle = finalAngle,
             probability = prob,
-            fgColor = sorted.firstOrNull()?.fgColor,
-            bgColor = sorted.firstOrNull()?.bgColor,
+            fgColor = avgFg,
+            bgColor = avgBg,
             _direction = direction,
         )
     }

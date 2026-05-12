@@ -19,12 +19,32 @@ import com.sakuravillager.manga_translator.translation.translator.NoOpTranslator
 import com.sakuravillager.manga_translator.translation.stub.NoOpMaskRefiner
 import com.sakuravillager.manga_translator.translation.stub.NoOpInpainter
 import com.sakuravillager.manga_translator.translation.stub.NoOpTextRenderer
+import com.sakuravillager.manga_translator.translation.api.Colorizer
+import com.sakuravillager.manga_translator.translation.api.Upscaler
+import com.sakuravillager.manga_translator.translation.data.config.ColorizerConfig
+import com.sakuravillager.manga_translator.translation.data.config.UpscaleConfig
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert
 import org.junit.Test
 import org.junit.runner.RunWith
+
+private val noOpColorizer = object : Colorizer {
+    override val name: String = "NoOpColorizer"
+    override val isReady: Boolean get() = true
+    override suspend fun prepare() {}
+    override suspend fun release() {}
+    override suspend fun colorize(bitmap: Bitmap, config: ColorizerConfig): Bitmap = bitmap
+}
+
+private val noOpUpscaler = object : Upscaler {
+    override val name: String = "NoOpUpscaler"
+    override val isReady: Boolean get() = true
+    override suspend fun prepare() {}
+    override suspend fun release() {}
+    override suspend fun upscale(bitmap: Bitmap, config: UpscaleConfig): Bitmap = bitmap
+}
 
 @RunWith(AndroidJUnit4::class)
 class TranslationPipelineTest {
@@ -36,6 +56,8 @@ class TranslationPipelineTest {
             recognizer = NoOpTextRecognizer(),
             merger = NoOpTextlineMerger(),
             translator = NoOpTranslator(),
+            colorizer = noOpColorizer,
+            upscaler = noOpUpscaler,
             maskRefiner = NoOpMaskRefiner(),
             inpainter = NoOpInpainter(),
             renderer = NoOpTextRenderer(),
@@ -53,6 +75,8 @@ class TranslationPipelineTest {
             recognizer = NoOpTextRecognizer(),
             merger = NoOpTextlineMerger(),
             translator = NoOpTranslator(),
+            colorizer = noOpColorizer,
+            upscaler = noOpUpscaler,
             maskRefiner = NoOpMaskRefiner(),
             inpainter = NoOpInpainter(),
             renderer = NoOpTextRenderer(),
@@ -74,6 +98,8 @@ class TranslationPipelineTest {
             recognizer = NoOpTextRecognizer(),
             merger = NoOpTextlineMerger(),
             translator = NoOpTranslator(),
+            colorizer = noOpColorizer,
+            upscaler = noOpUpscaler,
             maskRefiner = NoOpMaskRefiner(),
             inpainter = NoOpInpainter(),
             renderer = NoOpTextRenderer(),

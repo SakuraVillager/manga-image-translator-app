@@ -25,7 +25,8 @@ class HorizontalTextRendererTest {
     @Before
     fun setUp() {
         val context = ApplicationProvider.getApplicationContext<Application>()
-        renderer = HorizontalTextRenderer(context)
+        val dummyMd = com.sakuravillager.manga_translator.translation.model.ModelDownloadManager(context)
+        renderer = HorizontalTextRenderer(context, dummyMd)
     }
 
     @Test

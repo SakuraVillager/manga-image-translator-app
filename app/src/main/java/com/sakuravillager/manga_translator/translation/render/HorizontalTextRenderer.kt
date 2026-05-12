@@ -6,8 +6,22 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.PointF
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.Typeface
 import android.util.Log
+import com.sakuravillager.manga_translator.data.logging.AppLogger
+import org.opencv.android.Utils
+import org.opencv.core.Core
+import org.opencv.core.CvType
+import org.opencv.core.Mat
+import org.opencv.core.MatOfPoint2f
+import org.opencv.core.Point
+import org.opencv.core.Scalar
+import org.opencv.core.Size
+import org.opencv.calib3d.Calib3d
+import org.opencv.imgproc.Imgproc
 import com.sakuravillager.manga_translator.translation.api.TextRenderer
 import com.sakuravillager.manga_translator.translation.data.TextAlignment
 import com.sakuravillager.manga_translator.translation.data.TextBlock
@@ -73,22 +87,29 @@ class HorizontalTextRenderer(
         val result = bitmap.copy(Bitmap.Config.ARGB_8888, true) ?: return bitmap
         val canvas = Canvas(result)
 
+        // Compute expanded destination quads (matching Python resize_regions_to_font_size)
+        var ri = 0
         for (region in textRegions) {
             val renderText = region.getTranslationForRendering()
-            // Skip regions without translation text
             if (renderText.isEmpty()) continue
 
             val rect = region.minRect
-            // Skip empty/invalid bounding rects
             if (rect.isEmpty) continue
 
-            // --- Font size ---
-            var textSize = region.fontSize + config.fontSizeOffset
-            textSize = if (config.fontSizeMinimum > 0) {
-                maxOf(textSize, config.fontSizeMinimum.toFloat())
-            } else {
-                maxOf(textSize, 1f)
+            // Perspective render for horizontal text only; Canvas for vertical text
+            if (region.isHorizontal) {
+                val dstPoints = computeDstPointsFromRegion(region)
+                try {
+                    perspectiveRender(result, region, dstPoints, config.disableFontBorder)
+                    continue
+                } catch (_: Exception) { /* fall through to Canvas */ }
             }
+
+            // Canvas-based rendering for vertical text (matches Python put_text_vertical)
+            AppLogger.i(name, "[FALLBACK] dir=${region.direction} isH=${region.isHorizontal} text='${renderText.take(10)}' rect=${rect.width().toInt()}x${rect.height().toInt()}")
+
+            var textSize = region.fontSize + config.fontSizeOffset
+            textSize = if (config.fontSizeMinimum > 0) maxOf(textSize, config.fontSizeMinimum.toFloat()) else maxOf(textSize, 1f)
 
             val (regionFg, regionBg) = region.getFontColors()
             val fgColor = config.fontColor?.let { parseColorOrNull(it) } ?: regionFg
@@ -193,26 +214,16 @@ class HorizontalTextRenderer(
         disableBorder: Boolean,
         strokeWidth: Float,
     ) {
-        var fontSize = paint.textSize
-
-        // Estimate max characters per column based on available height
-        var maxCharsPerColumn =
-            (rect.height() / (fontSize * 1.2f)).toInt().coerceAtLeast(1)
-        var numColumns =
-            kotlin.math.ceil(text.length.toFloat() / maxCharsPerColumn).toInt()
-        val maxColumns =
-            (rect.width() / (fontSize * 1.1f)).toInt().coerceAtLeast(1)
-
-        // Scale down if too many columns for available width
-        if (numColumns > maxColumns) {
-            fontSize *= (maxColumns.toFloat() / numColumns.toFloat())
-            paint.textSize = fontSize
-            // Recompute after scaling
-            maxCharsPerColumn =
-                (rect.height() / (fontSize * 1.2f)).toInt().coerceAtLeast(1)
-            numColumns =
-                kotlin.math.ceil(text.length.toFloat() / maxCharsPerColumn).toInt()
-        }
+        // Scale font to fit text within rect bounds (single vertical column).
+        // Python uses perspective transform to squash wide canvas into narrow quad;
+        // Canvas renders directly, so we must constrain to 1 column that fits.
+        val maxByWidth = rect.width() / 1.1f
+        val maxByHeight = rect.height() / (text.length.coerceAtLeast(1) * 1.2f)
+        var fontSize = minOf(paint.textSize, maxByWidth, maxByHeight).coerceAtLeast(4f)
+        paint.textSize = fontSize
+        var maxCharsPerColumn = text.length.coerceAtLeast(1)
+        var numColumns = 1
+        AppLogger.i(name, "[V-RENDER] text='${text.take(10)}' fontSize=$fontSize rect=${rect.width().toInt()}x${rect.height().toInt()} maxW=${"%.1f".format(maxByWidth)} maxH=${"%.1f".format(maxByHeight)}")
 
         // Draw characters top-to-bottom, columns right-to-left
         var colX = rect.right - fontSize
@@ -402,5 +413,220 @@ class HorizontalTextRenderer(
 
     private fun parseColorOrNull(color: String): Int? {
         return runCatching { Color.parseColor(color) }.getOrNull()
+    }
+
+    // ==================================================================
+    // Perspective render — exact port of Python rendering/__init__.py render() L264-410
+    // ==================================================================
+
+    /**
+     * Renders translated text onto the image using perspective transform.
+     * Exact port of Python rendering/__init__.py L264-410.
+     *
+     * @param img destination image (modified in-place via Canvas)
+     * @param region TextBlock with translation
+     * @param dstPoints 4 corners of the text region on the image [TL, TR, BR, BL]
+     */
+    private fun perspectiveRender(
+        img: Bitmap,
+        region: TextBlock,
+        dstPoints: List<PointF>,
+        disableBorder: Boolean,
+    ) {
+        // Python L272-276: fg_bg_compare
+        val (fg, bg) = region.getFontColors()
+        val (useFg, useBg) = fgColorBgCompare(region, fg, bg)
+        val effectiveBg = if (disableBorder) 0 else useBg
+
+        // Python L278-281: middle_pts = (dst[:, [1,2,3,0]] + dst) / 2
+        // indices: [1,2,3,0] cyclically from [0,1,2,3]
+        val m = Array(4) { i ->
+            val j = (i + 1) % 4
+            PointF((dstPoints[i].x + dstPoints[j].x) / 2f, (dstPoints[i].y + dstPoints[j].y) / 2f)
+        }
+        // norm_h = distance(m[1], m[3])  (horizontal span)
+        val nhx = m[1].x - m[3].x; val nhy = m[1].y - m[3].y
+        val normH = kotlin.math.sqrt(nhx * nhx + nhy * nhy)
+        // norm_v = distance(m[2], m[0])  (vertical span)
+        val nvx = m[2].x - m[0].x; val nvy = m[2].y - m[0].y
+        val normV = kotlin.math.sqrt(nvx * nvx + nvy * nvy)
+        if (normH <= 0f || normV <= 0f) return
+        val rOrig = normH / normV
+
+        // Python L284-293: render_horizontally
+        val renderHorizontally = region.isHorizontal
+
+        // Python L297-320: put_text_horizontal or put_text_vertical
+        val renderedText = region.getTranslationForRendering()
+        val tempBox = if (renderHorizontally) {
+            renderTextHorizontal(region.fontSize, renderedText,
+                normH.toInt(), normV.toInt(), region.alignment, useFg, effectiveBg)
+        } else {
+            renderTextVertical(region.fontSize, renderedText,
+                normV.toInt(), region.alignment, useFg, effectiveBg)
+        }
+        val rTemp = tempBox.width.toFloat() / tempBox.height.coerceAtLeast(1).toFloat()
+
+        // Python L324-397: extend box to match r_orig
+        val box = if (region.isHorizontal) {
+            if (rTemp > rOrig) {
+                val hExt = ((tempBox.width / rOrig - tempBox.height) / 2.0).toInt().coerceAtLeast(0)
+                padVertical(tempBox, hExt)
+            } else {
+                val wExt = ((tempBox.height * rOrig - tempBox.width) / 2.0).toInt().coerceAtLeast(0)
+                padHorizontal(tempBox, wExt)
+            }
+        } else {
+            if (rTemp > rOrig) {
+                val hExt = ((tempBox.width / (2 * rOrig) - tempBox.height / 2.0)).toInt().coerceAtLeast(0)
+                padVertical(tempBox, hExt)
+            } else {
+                val wExt = ((tempBox.height * rOrig - tempBox.width) / 2.0).toInt().coerceAtLeast(0)
+                padHorizontalCentered(tempBox, wExt)
+            }
+        } ?: tempBox
+
+        // Python L400-409: cv2.findHomography(RANSAC) + warpPerspective + alpha composite
+        val boxMat = Mat()
+        val warped = Mat()
+        try {
+            Utils.bitmapToMat(box, boxMat)
+            // Python uses cv2.findHomography(cv2.RANSAC, 5.0) — robust homography
+            val srcPts = MatOfPoint2f(Point(0.0, 0.0), Point(box.width.toDouble(), 0.0),
+                Point(box.width.toDouble(), box.height.toDouble()), Point(0.0, box.height.toDouble()))
+            val dstPts = MatOfPoint2f(Point(dstPoints[0].x.toDouble(), dstPoints[0].y.toDouble()),
+                Point(dstPoints[1].x.toDouble(), dstPoints[1].y.toDouble()),
+                Point(dstPoints[2].x.toDouble(), dstPoints[2].y.toDouble()),
+                Point(dstPoints[3].x.toDouble(), dstPoints[3].y.toDouble()))
+            val transform = Calib3d.findHomography(srcPts, dstPts, Calib3d.RANSAC, 5.0)
+            srcPts.release(); dstPts.release()
+            if (transform.empty()) return
+            Imgproc.warpPerspective(boxMat, warped, transform,
+                Size(img.width.toDouble(), img.height.toDouble()),
+                Imgproc.INTER_LINEAR, Core.BORDER_CONSTANT, Scalar(0.0, 0.0, 0.0, 0.0))
+            transform.release()
+
+            AppLogger.i(name, "[RENDER] box=${box.width}x${box.height} dstW=${normH.toInt()}x${normV.toInt()} rTemp=${"%.2f".format(rTemp)} rOrig=${"%.2f".format(rOrig)} fg=#${Integer.toHexString(useFg)} bg=#${Integer.toHexString(effectiveBg)} text='${region.translation.take(8)}'")
+
+            // Python L406-409: boundingRect + alpha composite
+            val dstArr = floatArrayOf(dstPoints[0].x, dstPoints[0].y, dstPoints[1].x, dstPoints[1].y,
+                dstPoints[2].x, dstPoints[2].y, dstPoints[3].x, dstPoints[3].y)
+            var minX = dstArr[0]; var maxX = dstArr[0]; var minY = dstArr[1]; var maxY = dstArr[1]
+            for (i in 1 until 4) { minX = minOf(minX, dstArr[i*2]); maxX = maxOf(maxX, dstArr[i*2]) }
+            for (i in 1 until 4) { minY = minOf(minY, dstArr[i*2+1]); maxY = maxOf(maxY, dstArr[i*2+1]) }
+            val x = minX.toInt().coerceAtLeast(0)
+            val y = minY.toInt().coerceAtLeast(0)
+            val w = (maxX - minX).toInt().coerceAtMost(img.width - x)
+            val h = (maxY - minY).toInt().coerceAtMost(img.height - y)
+            if (w <= 0 || h <= 0) return
+
+            val warpedBmp = Bitmap.createBitmap(warped.cols(), warped.rows(), Bitmap.Config.ARGB_8888)
+            Utils.matToBitmap(warped, warpedBmp)
+            val regionBmp = Bitmap.createBitmap(warpedBmp, x, y, w, h)
+            warpedBmp.recycle()
+
+            // Alpha composite: img = img*(1-mask) + canvas*mask
+            val alphaPixels = IntArray(w * h)
+            regionBmp.getPixels(alphaPixels, 0, w, 0, 0, w, h)
+            val srcPixels = IntArray(w * h)
+            img.getPixels(srcPixels, 0, w, x, y, w, h)
+            for (i in 0 until w * h) {
+                val alpha = ((alphaPixels[i] ushr 24) and 0xFF) / 255f
+                val r = ((srcPixels[i] shr 16) and 0xFF) * (1 - alpha) + ((alphaPixels[i] shr 16) and 0xFF) * alpha
+                val g = ((srcPixels[i] shr 8) and 0xFF) * (1 - alpha) + ((alphaPixels[i] shr 8) and 0xFF) * alpha
+                val b = (srcPixels[i] and 0xFF) * (1 - alpha) + (alphaPixels[i] and 0xFF) * alpha
+                srcPixels[i] = (0xFF shl 24) or (r.toInt() shl 16) or (g.toInt() shl 8) or b.toInt()
+            }
+            img.setPixels(srcPixels, 0, w, x, y, w, h)
+            regionBmp.recycle()
+        } finally {
+            boxMat.release()
+            if (!warped.empty()) warped.release()
+        }
+    }
+
+    /** Python L31-35: fg_bg_compare */
+    private fun fgColorBgCompare(region: TextBlock, fg: Int, bg: Int): Pair<Int, Int> {
+        // Already done in getFontColors() — just return as-is
+        return fg to bg
+    }
+
+    /** Render horizontal text — equivalent to Python put_text_horizontal output */
+    private fun renderTextHorizontal(fontSize: Float, text: String, maxW: Int, maxH: Int,
+                                     align: TextAlignment, fg: Int, bg: Int): Bitmap {
+        val paint = Paint().apply {
+            this.textSize = fontSize; color = fg; isAntiAlias = true
+            typeface = this@HorizontalTextRenderer.typeface ?: Typeface.DEFAULT
+        }
+        val tw = paint.measureText(text).toInt() + 4
+        val th = (fontSize * 1.2f).toInt()
+        val w = maxOf(maxW, tw); val h = maxOf(maxH, th)
+        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        Canvas(bmp).apply {
+            drawColor(0, PorterDuff.Mode.CLEAR)
+            val fm = paint.fontMetrics; val y = (h - fm.bottom + fm.top) / 2f - fm.top
+            val x = when (align) {
+                TextAlignment.CENTER -> ((w - paint.measureText(text)) / 2f).coerceAtLeast(0f)
+                TextAlignment.RIGHT -> (w - paint.measureText(text)).coerceAtLeast(0f)
+                else -> 0f
+            }
+            drawText(text, x, y, paint)
+        }
+        return bmp
+    }
+
+    /** Render vertical text placeholder */
+    private fun renderTextVertical(fontSize: Float, text: String, maxH: Int,
+                                   align: TextAlignment, fg: Int, bg: Int): Bitmap {
+        // Fallback: render horizontal then rotate
+        val w = maxOf(maxH, (fontSize * text.length * 0.6f).toInt())
+        val h = (fontSize * 1.2f).toInt()
+        return renderTextHorizontal(fontSize, text, w, h, align, fg, bg)
+    }
+
+    /** Python L338-349: vertical padding (top+bottom) */
+    private fun padVertical(src: Bitmap, hExt: Int): Bitmap? {
+        if (hExt <= 0) return null
+        val newH = src.height + hExt * 2
+        val bmp = Bitmap.createBitmap(src.width, newH, Bitmap.Config.ARGB_8888)
+        Canvas(bmp).apply { drawColor(0, PorterDuff.Mode.CLEAR); drawBitmap(src, 0f, hExt.toFloat(), null) }
+        return bmp
+    }
+
+    /** Python L352-365: horizontal padding (left+right), text left-aligned */
+    private fun padHorizontal(src: Bitmap, wExt: Int): Bitmap? {
+        if (wExt <= 0) return null
+        val newW = src.width + wExt * 2
+        val bmp = Bitmap.createBitmap(newW, src.height, Bitmap.Config.ARGB_8888)
+        Canvas(bmp).apply { drawColor(0, PorterDuff.Mode.CLEAR); drawBitmap(src, 0f, 0f, null) }
+        return bmp
+    }
+
+    /** Python L389-394: horizontal padding, centered */
+    private fun padHorizontalCentered(src: Bitmap, wExt: Int): Bitmap? {
+        if (wExt <= 0) return null
+        val newW = src.width + wExt * 2
+        val bmp = Bitmap.createBitmap(newW, src.height, Bitmap.Config.ARGB_8888)
+        Canvas(bmp).apply { drawColor(0, PorterDuff.Mode.CLEAR); drawBitmap(src, wExt.toFloat(), 0f, null) }
+        return bmp
+    }
+
+    // ==================================================================
+    // Region expansion helpers (matching Python rendering/__init__.py L37-233)
+    // ==================================================================
+
+    /** Python L37-46: count text length, treating small kana as 0.5 */
+    private fun countTextLength(text: String): Float {
+        val halfWidthChars = setOf('っ', 'ッ', 'ぁ', 'ぃ', 'ぅ', 'ぇ', 'ぉ')
+        var length = 0f
+        for (ch in text.trim()) { length += if (ch in halfWidthChars) 0.5f else 1.0f }
+        return length
+    }
+
+    /** Computes destination quad points from a TextBlock (using minRect) */
+    private fun computeDstPointsFromRegion(region: TextBlock, first: Boolean = false): List<PointF> {
+        val rect = region.minRect
+        return listOf(PointF(rect.left, rect.top), PointF(rect.right, rect.top),
+            PointF(rect.right, rect.bottom), PointF(rect.left, rect.bottom))
     }
 }

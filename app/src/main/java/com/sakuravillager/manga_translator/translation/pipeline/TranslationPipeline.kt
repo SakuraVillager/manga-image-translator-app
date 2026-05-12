@@ -6,6 +6,7 @@ import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
 import android.util.Log
+import com.sakuravillager.manga_translator.data.logging.AppLogger
 import com.sakuravillager.manga_translator.translation.api.Colorizer
 import com.sakuravillager.manga_translator.translation.api.Inpainter
 import com.sakuravillager.manga_translator.translation.api.MaskRefiner
@@ -63,11 +64,50 @@ class TranslationPipeline(
         config.filterText?.let { Regex(it) }
     }
 
+    // ─── Model usage tracking (matches Python _model_usage_timestamps, L140) ───
+    /**
+     * Tracks last-usage timestamps for (tool, model) pairs.
+     * Used by cleanup logic to decide which models can be released.
+     */
+    private val modelUsageTimestamps = mutableMapOf<Pair<String, String>, Long>()
+
+    /** Records a timestamp for a model's usage (matches Python L668-672 pattern). */
+    private fun trackModelUsage(tool: String, model: String) {
+        modelUsageTimestamps[tool to model] = System.currentTimeMillis()
+    }
+
+    /**
+     * Unloads models that haven't been used within [ttlMs].
+     * Called between pipeline invocations or during batch processing.
+     * Matches Python _detector_cleanup_job (L714-724).
+     */
+    private suspend fun cleanupStaleModels(ttlMs: Long) {
+        if (ttlMs <= 0) return
+        val now = System.currentTimeMillis()
+        val toRemove = modelUsageTimestamps.filter { (_, lastUsed) ->
+            now - lastUsed > ttlMs
+        }
+        for ((key, _) in toRemove) {
+            val (tool, model) = key
+            AppLogger.i(TAG, "Unloading stale $tool model: $model")
+            when (tool) {
+                "colorization" -> colorizer.release()
+                "detection" -> detector.release()
+                "inpainting" -> inpainter.release()
+                "ocr" -> recognizer.release()
+                "upscaling" -> upscaler.release()
+                "translation" -> translator.release()
+            }
+            modelUsageTimestamps.remove(key)
+        }
+    }
+
     private val _progress = MutableStateFlow<TranslationProgress>(TranslationProgress.Idle)
     val progress: StateFlow<TranslationProgress> = _progress.asStateFlow()
 
     suspend fun translate(inputBitmap: Bitmap): TranslationResult {
         val ctx = TranslationContext(inputBitmap = inputBitmap, config = config)
+        AppLogger.i(TAG, "[PIPELINE] Starting translate: ${inputBitmap.width}x${inputBitmap.height}, det=${config.detector.detector}, ocr=${config.ocr.ocrEngine}, trans=${config.translator.translator}")
         return try {
             // Step 0: Prepare
             _progress.value = TranslationProgress.Loading("Preparing models...")
@@ -125,8 +165,10 @@ class TranslationPipeline(
                 val detectionResult = detector.detect(processingBitmap, config.detector)
                 ctx.textlines = detectionResult.textlines.toMutableList()
                 ctx.rawMask = detectionResult.rawMask
+                trackModelUsage("detection", config.detector.detector.name)
+                AppLogger.i(TAG, "[DETECT] Found ${ctx.textlines.size} textlines (det=${config.detector.detector}, ${processingBitmap.width}x${processingBitmap.height})")
             } catch (e: Exception) {
-                Log.e(TAG, "Error during detection: ${e.message}", e)
+                AppLogger.e(TAG, "[DETECT] Error: ${e.message}", e)
                 if (!config.ignoreErrors) throw e
                 ctx.textlines = mutableListOf()
                 ctx.rawMask = null
@@ -137,19 +179,27 @@ class TranslationPipeline(
                 ctx.imgRgb?.let { ctx.debugImages["bboxes_unfiltered.png"] = drawQuadrilaterals(it, ctx.textlines) }
             }
             if (ctx.textlines.isEmpty()) {
-                Log.i("TranslationPipeline", "NoText after detection: detector=${detector.name}, image=${processingBitmap.width}x${processingBitmap.height}")
+                AppLogger.i(TAG, "[DETECT-NOTEXT] 0 textlines found (det=${detector.name}, image=${processingBitmap.width}x${processingBitmap.height})")
                 return TranslationResult.NoText(processingBitmap)
             }
 
             // Step 4: OCR
             _progress.value = TranslationProgress.Processing("Recognizing text...", 0.25f)
+            AppLogger.i(TAG, "[OCR-PRE] Calling recognize() with ${ctx.textlines.size} textlines, image=${processingBitmap.width}x${processingBitmap.height}, engine=${config.ocr.ocrEngine}")
             try {
                 ctx.textlines = recognizer.recognize(processingBitmap, ctx.textlines, config.ocr).toMutableList()
+                AppLogger.i(TAG, "[OCR-POST] recognize() returned ${ctx.textlines.size} textlines, nonBlank=${ctx.textlines.count { it.text.isNotBlank() }}")
                 ctx.textlines = ctx.textlines.sortedWith(compareBy<Quadrilateral> {
                     it.readingOrderIndex ?: Int.MAX_VALUE
                 }.thenBy { it.sourceIndex ?: Int.MAX_VALUE }).toMutableList()
+                trackModelUsage("ocr", config.ocr.ocrEngine.name)
+                AppLogger.i(TAG, "[OCR] Recognized ${ctx.textlines.size} textlines (engine=${config.ocr.ocrEngine})")
+                // Log first 5 recognized texts for diagnostics
+                ctx.textlines.filter { it.text.isNotBlank() }.take(5).forEachIndexed { i, q ->
+                    AppLogger.i(TAG, "[OCR]   [$i] '${q.text}' (prob=${q.probability}, fontSize=${q.fontSize})")
+                }
             } catch (e: Exception) {
-                Log.e(TAG, "Error during ocr: ${e.message}", e)
+                AppLogger.e(TAG, "[OCR] Error: ${e.message}", e)
                 if (!config.ignoreErrors) throw e
                 ctx.textlines = mutableListOf()
             }
@@ -159,7 +209,7 @@ class TranslationPipeline(
                 "OCR result: total=${ctx.textlines.size}, nonBlank=$recognizedCount, engine=${config.ocr.ocrEngine}",
             )
             if (ctx.textlines.all { it.text.isBlank() }) {
-                Log.i("TranslationPipeline", "NoText after OCR: engine=${config.ocr.ocrEngine}")
+                AppLogger.i(TAG, "[OCR-NOTEXT] All ${ctx.textlines.size} textlines have blank text — sample texts: ${ctx.textlines.take(3).map { "'${it.text}'" }}")
                 return TranslationResult.NoText(processingBitmap)
             }
 
@@ -173,8 +223,12 @@ class TranslationPipeline(
                 ctx.textRegions = mutableListOf()
             }
             if (ctx.textRegions.isEmpty()) {
-                Log.i("TranslationPipeline", "NoText after merge: lines=${ctx.textlines.size}")
+                AppLogger.i(TAG, "[MERGE] NoText: ${ctx.textlines.size} lines → 0 regions (texts=${ctx.textlines.map { it.text }})")
                 return TranslationResult.NoText(processingBitmap)
+            }
+            AppLogger.i(TAG, "[MERGE] ${ctx.textlines.size} lines → ${ctx.textRegions.size} regions")
+            ctx.textRegions.take(5).forEachIndexed { i, r ->
+                AppLogger.i(TAG, "[MERGE]   [$i] '${r.text}' (sz=${r.fontSize}, dir=${r.direction})")
             }
 
             ctx.textRegions = RegionSorter.sortRegions(
@@ -195,6 +249,20 @@ class TranslationPipeline(
 
             // Apply pre-dictionary (text replacement before translation)
             ctx.textRegions = applyPreDictionary(ctx.textRegions, config).toMutableList()
+            AppLogger.i(TAG, "[PRE-DICT] Applied, ${ctx.textRegions.size} regions remain")
+
+            // Fix unmatched/mismatched brackets (matches Python _run_textline_merge L806-888)
+            try {
+                val before = ctx.textRegions.size
+                ctx.textRegions = fixBrackets(ctx.textRegions).toMutableList()
+                AppLogger.i(TAG, "[BRACKETS] After bracket fix: $before → ${ctx.textRegions.size} regions")
+                ctx.textRegions.take(5).forEachIndexed { i, r ->
+                    AppLogger.i(TAG, "[BRACKETS]   [$i] '${r.text}'")
+                }
+            } catch (e: Exception) {
+                AppLogger.e(TAG, "[BRACKETS] Error: ${e.message}", e)
+                // Continue with unmodified regions
+            }
 
             // Step 6: Translation
             _progress.value = TranslationProgress.Processing("Translating...", 0.5f)
@@ -203,6 +271,7 @@ class TranslationPipeline(
             ctx.fromLanguage = detectSourceLanguage(allText).first
             try {
                 ctx.textRegions = translateWithValidationRetry(ctx.textRegions, config, ctx.fromLanguage)
+                trackModelUsage("translation", config.translator.translator.name)
             } catch (e: Exception) {
                 Log.e(TAG, "Error during translation: ${e.message}", e)
                 if (!config.ignoreErrors) throw e
@@ -243,6 +312,7 @@ class TranslationPipeline(
             try {
                 ctx.imgInpainted = inpainter.inpaint(processingBitmap, ctx.refinedMask!!, config.inpainter)
                 ctx.gimpMask = ctx.imgInpainted
+                trackModelUsage("inpainting", config.inpainter.inpainter.name)
             } catch (e: Exception) {
                 Log.e(TAG, "Error during inpainting: ${e.message}", e)
                 if (!config.ignoreErrors) throw e
@@ -257,6 +327,11 @@ class TranslationPipeline(
 
             // Step 9: Rendering
             _progress.value = TranslationProgress.Processing("Rendering text...", 0.85f)
+            AppLogger.i(TAG, "[RENDER-PRE] Passing ${ctx.textRegions.size} regions to renderer:")
+            ctx.textRegions.forEachIndexed { i, r ->
+                val rect = r.minRect
+                AppLogger.i(TAG, "[RENDER-PRE]   [$i] '${r.translation.take(15)}' at (${rect.left.toInt()},${rect.top.toInt()})-(${rect.right.toInt()},${rect.bottom.toInt()}) sz=${"%.0f".format(rect.width())}x${"%.0f".format(rect.height())} fontSize=${"%.0f".format(r.fontSize)} lines=${r.lines.size}")
+            }
             try {
                 val safeInpainted = ctx.imgInpainted?.copy(Bitmap.Config.ARGB_8888, false) ?: ctx.imgInpainted
                 ctx.imgRendered = renderer.render(safeInpainted!!, ctx.textRegions, config.renderer)
@@ -542,11 +617,95 @@ class TranslationPipeline(
         // Apply pre-dictionary
         ctx.textRegions = applyPreDictionary(ctx.textRegions, config).toMutableList()
 
+        // Fix unmatched/mismatched brackets
+        ctx.textRegions = fixBrackets(ctx.textRegions).toMutableList()
+        AppLogger.i(TAG, "[BATCH-BRACKETS] After bracket fix: ${ctx.textRegions.size} regions")
+        ctx.textRegions.take(3).forEachIndexed { i, r ->
+            AppLogger.i(TAG, "[BATCH-BRACKETS]   [$i] '${r.text}'")
+        }
+
         // Detect source language from merged text
         val allText = ctx.textRegions.joinToString("") { it.text }
         ctx.fromLanguage = detectSourceLanguage(allText).first
 
         return ctx  // contains textRegions ready for translation
+    }
+
+    /**
+     * Fixes unmatched/mismatched brackets in text regions.
+     * Ported from Python _run_textline_merge (manga_translator.py L806-888).
+     *
+     * Two-pass algorithm:
+     * 1. First pass: mark unmatched left/right brackets for removal
+     * 2. Second pass: replace mismatched right brackets with correct counterparts
+     */
+    private fun fixBrackets(regions: List<TextBlock>): List<TextBlock> {
+        val bracketPairs = mapOf(
+            '(' to ')', '（' to '）', '[' to ']', '【' to '】', '{' to '}',
+            '〔' to '〕', '〈' to '〉', '「' to '」', '"' to '"', '＂' to '＂',
+            '\'' to '\'', '“' to '”', '《' to '》', '『' to '』',
+            '〝' to '〞', '﹁' to '﹂', '﹃' to '﹄',
+            '⸂' to '⸃', '⸄' to '⸅', '⸉' to '⸊', '⸌' to '⸍', '⸜' to '⸝', '⸠' to '⸡',
+            '‹' to '›', '«' to '»', '＜' to '＞', '<' to '>',
+        )
+        val leftSymbols = bracketPairs.keys
+        val rightSymbols = bracketPairs.values.toSet()
+
+        return regions.map { region ->
+            val strippedText = region.text.trim()
+            if (strippedText.isEmpty()) return@map region
+
+            val hasBrackets = strippedText.any { it in leftSymbols || it in rightSymbols }
+            if (!hasBrackets) return@map region
+
+            // First pass: mark unmatched brackets
+            val toSkip = mutableSetOf<Int>()
+            val stack = ArrayDeque<Pair<Int, Char>>()
+            for ((i, ch) in strippedText.withIndex()) {
+                if (ch in leftSymbols) {
+                    stack.addLast(i to ch)
+                } else if (ch in rightSymbols) {
+                    if (stack.isNotEmpty()) {
+                        stack.removeLast()
+                    } else {
+                        toSkip.add(i) // Unmatched right bracket
+                    }
+                }
+            }
+            // Mark unmatched left brackets
+            for ((pos, _) in stack) {
+                toSkip.add(pos)
+            }
+
+            val removedSymbols = toSkip.isNotEmpty()
+
+            // Second pass: fix mismatched brackets and filter
+            val resultChars = mutableListOf<Char>()
+            val bracketStack = ArrayDeque<Char>()
+            for ((i, ch) in strippedText.withIndex()) {
+                if (i in toSkip) continue
+
+                if (ch in leftSymbols) {
+                    bracketStack.addLast(ch)
+                    resultChars.add(ch)
+                } else if (ch in rightSymbols) {
+                    if (bracketStack.isNotEmpty()) {
+                        val leftBracket = bracketStack.removeLast()
+                        val expectedRight = bracketPairs[leftBracket]
+                        if (ch != expectedRight) {
+                            resultChars.add(expectedRight ?: ch)
+                        } else {
+                            resultChars.add(ch)
+                        }
+                    }
+                } else {
+                    resultChars.add(ch)
+                }
+            }
+
+            val cleaned = resultChars.joinToString("").trim()
+            region.copy(text = cleaned)
+        }
     }
 
     private fun applyPreDictionary(regions: List<TextBlock>, config: TranslationConfig): List<TextBlock> {
@@ -1023,42 +1182,47 @@ class TranslationPipeline(
             ?.filter { it.isNotEmpty() }
             .orEmpty()
 
-        return regions.filter { region ->
+        var filteredBlank = 0
+        var filteredSkipLang = 0
+        var filteredSameLang = 0
+        var filteredDigits = 0
+        var filteredRegex = 0
+        var filteredUnchanged = 0
+
+        val result = regions.filter { region ->
             val translation = region.translation
-            if (translation.isBlank()) {
-                return@filter false
-            }
+            if (translation.isBlank()) { filteredBlank++; return@filter false }
 
             val sourceLanguage = detectSourceLanguage(region.text).first
             if (skipLanguages.isNotEmpty() && sourceLanguage in skipLanguages) {
                 Log.i(TAG, "Filtered out: $translation")
                 Log.i(TAG, "Reason: sourceLanguage=$sourceLanguage in skipLanguages=$skipLanguages")
-                return@filter false
+                filteredSkipLang++; return@filter false
             }
 
             if (sourceLanguage != "UNKNOWN" && sourceLanguage == config.translator.targetLanguage.uppercase()) {
                 Log.i(TAG, "Filtered out: $translation")
                 Log.i(TAG, "Reason: sourceLanguage=$sourceLanguage matches targetLanguage")
-                return@filter false
+                filteredSameLang++; return@filter false
             }
 
             if (config.translator.translator != TranslatorType.NONE) {
                 if (translation.all { it.isDigit() }) {
                     Log.i(TAG, "Filtered out: $translation")
                     Log.i(TAG, "Reason: translation is all digits")
-                    return@filter false
+                    filteredDigits++; return@filter false
                 }
                 if (filterTextRegex != null && filterTextRegex!!.containsMatchIn(translation)) {
                     Log.i(TAG, "Filtered out: $translation")
                     Log.i(TAG, "Reason: matches filterText=${config.filterText}")
-                    return@filter false
+                    filteredRegex++; return@filter false
                 }
                 if (config.translator.translator != TranslatorType.ORIGINAL &&
                     region.text.trim().lowercase() == translation.trim().lowercase()
                 ) {
                     Log.i(TAG, "Filtered out: $translation")
                     Log.i(TAG, "Reason: translation unchanged from source text")
-                    return@filter false
+                    filteredUnchanged++; return@filter false
                 }
             }
             true
@@ -1070,6 +1234,9 @@ class TranslationPipeline(
                 language = if (sourceLanguage == "UNKNOWN") region.language else sourceLanguage,
             )
         }
+
+        AppLogger.i(TAG, "[FILTER] ${regions.size} → ${result.size} regions (blank=$filteredBlank skipLang=$filteredSkipLang sameLang=$filteredSameLang digits=$filteredDigits regex=$filteredRegex unchanged=$filteredUnchanged)")
+        return result
     }
 
     /**

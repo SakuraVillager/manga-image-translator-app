@@ -244,7 +244,10 @@ class ModelDownloadManagerTest {
         assertNotNull(ModelRegistry.getModel("alphabet_v5"))
         assertNotNull(ModelRegistry.getModel("noto_sans_cjk_kr_regular"))
         assertNotNull(ModelRegistry.getModel("aot_inpainting"))
-        assertEquals(5, ModelRegistry.allModels.size)
+        assertNotNull(ModelRegistry.getModel("sugoi_v4"))
+        assertNotNull(ModelRegistry.getModel("jparacrawl"))
+        assertNotNull(ModelRegistry.getModel("jparacrawl_big"))
+        assertEquals(18, ModelRegistry.allModels.size)
     }
 
     @Test

@@ -16,8 +16,13 @@ import com.sakuravillager.manga_translator.translation.data.config.TranslationCo
 import com.sakuravillager.manga_translator.translation.inpaint.SimpleFillInpainter
 import com.sakuravillager.manga_translator.translation.mask.OpenCVMaskRefiner
 import com.sakuravillager.manga_translator.translation.merge.DefaultTextlineMerger
+import com.sakuravillager.manga_translator.translation.model.ModelDownloadManager
 import com.sakuravillager.manga_translator.translation.render.HorizontalTextRenderer
 import com.sakuravillager.manga_translator.translation.translator.OriginalTranslator
+import com.sakuravillager.manga_translator.translation.api.Colorizer
+import com.sakuravillager.manga_translator.translation.api.Upscaler
+import com.sakuravillager.manga_translator.translation.data.config.ColorizerConfig
+import com.sakuravillager.manga_translator.translation.data.config.UpscaleConfig
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.yield
@@ -97,14 +102,29 @@ class TranslationPipelineE2ETest {
         }
 
         // ── Build pipeline ──
+        val modelDl = ModelDownloadManager(context)
         val pipeline = TranslationPipeline(
             detector = fakeDetector,
             recognizer = fakeRecognizer,
             merger = DefaultTextlineMerger(),
             translator = OriginalTranslator(),
+            colorizer = object : Colorizer {
+                override val name = "NoOpColorizer"
+                override val isReady get() = true
+                override suspend fun prepare() {}
+                override suspend fun release() {}
+                override suspend fun colorize(bitmap: Bitmap, config: ColorizerConfig): Bitmap = bitmap
+            },
+            upscaler = object : Upscaler {
+                override val name = "NoOpUpscaler"
+                override val isReady get() = true
+                override suspend fun prepare() {}
+                override suspend fun release() {}
+                override suspend fun upscale(bitmap: Bitmap, config: UpscaleConfig): Bitmap = bitmap
+            },
             maskRefiner = OpenCVMaskRefiner(),
             inpainter = SimpleFillInpainter(),
-            renderer = HorizontalTextRenderer(context),
+            renderer = HorizontalTextRenderer(context, modelDl),
             config = TranslationConfig(),
         )
 

@@ -28,7 +28,7 @@ class QuadrilateralTest {
             points = emptyList(),
             text = "hello",
             probability = 0.95f,
-            direction = TextDirection.VERTICAL,
+            _direction = TextDirection.VERTICAL,
             fgColor = 0xFF0000,
             bgColor = 0xFFFFFF
         )

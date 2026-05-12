@@ -100,3 +100,30 @@ fun quadrilateralCanMergeRegion(
 
     return false
 }
+
+/**
+ * Coarse merge predicate: checks only direction, angle, font size ratio, and polygon distance.
+ * Simpler and faster than [quadrilateralCanMergeRegion], used for initial grouping.
+ *
+ * Ported from Python `quadrilateral_can_merge_region_coarse` (generic.py L700-714).
+ */
+fun quadrilateralCanMergeRegionCoarse(
+    a: Quadrilateral,
+    b: Quadrilateral,
+    discardConnectionGap: Float = 2f,
+    fontSizeRatioTol: Float = 0.7f,
+): Boolean {
+    if (a.direction != TextDirection.AUTO &&
+        b.direction != TextDirection.AUTO &&
+        a.direction != b.direction
+    ) return false
+
+    if (abs(a.angle - b.angle) > 15f * PI.toFloat() / 180f) return false
+
+    val fsMax = maxOf(a.fontSize, b.fontSize)
+    val fsMin = minOf(a.fontSize, b.fontSize).coerceAtLeast(1f)
+    if (abs(fsMax - fsMin) / fsMin > fontSizeRatioTol) return false
+
+    val dist = a.polyDistance(b)
+    return dist <= discardConnectionGap * maxOf(a.fontSize, b.fontSize)
+}

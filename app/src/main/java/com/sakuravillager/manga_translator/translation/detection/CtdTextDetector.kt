@@ -8,8 +8,6 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.PointF
 import android.util.Log
-import com.sakuravillager.manga_translator.translation.api.TextDetector
-import com.sakuravillager.manga_translator.translation.data.DetectionResult
 import com.sakuravillager.manga_translator.translation.data.Quadrilateral
 import com.sakuravillager.manga_translator.translation.data.TextDirection
 import com.sakuravillager.manga_translator.translation.data.config.DetectorConfig
@@ -34,28 +32,41 @@ import kotlin.math.sqrt
  * and decodes the output probability map using the DBNet pipeline:
  * binarize → findContours → minAreaRect → box_score_fast → unclip → Quadrilateral.
  */
-class CtdTextDetector(
+class CtdTextDetector private constructor(
     private val modelDownloadManager: ModelDownloadManager,
     private val sessionManager: OnnxSessionManager,
     @Suppress("unused") private val context: Context,
-) : TextDetector {
-
-    override val name: String = "CtdTextDetector"
-
-    private var _isReady = false
-    override val isReady: Boolean get() = _isReady
+) : OfflineDetector() {
 
     private var session: OrtSession? = null
     private val env: OrtEnvironment = OrtEnvironment.getEnvironment()
 
     companion object {
+        private const val TAG = "CtdTextDetector"
         const val INPUT_SIZE = 1024
         const val STRIDE = 64
         const val BINARY_THRESH = 0.3f
         const val BOX_THRESH = 0.6f
         const val UNCLIP_RATIO = 1.5f
         const val MAX_CANDIDATES = 1000
-        const val TAG = "CtdTextDetector"
+
+        @Volatile private var instance: CtdTextDetector? = null
+
+        fun getInstance(): CtdTextDetector {
+            return instance ?: throw IllegalStateException(
+                "CtdTextDetector not initialized. Call initialize() first."
+            )
+        }
+
+        fun initialize(
+            modelDownloadManager: ModelDownloadManager,
+            sessionManager: OnnxSessionManager,
+            context: Context,
+        ): CtdTextDetector {
+            return instance ?: synchronized(this) {
+                instance ?: CtdTextDetector(modelDownloadManager, sessionManager, context).also { instance = it }
+            }
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -84,18 +95,18 @@ class CtdTextDetector(
     // TextDetector
     // -----------------------------------------------------------------------
 
-    override suspend fun detect(
-        bitmap: Bitmap,
+    override suspend fun infer(
+        image: Bitmap,
         config: DetectorConfig,
-    ): DetectionResult = withContext(Dispatchers.Default) {
+    ): Triple<List<Quadrilateral>, Bitmap?, Bitmap?> = withContext(Dispatchers.Default) {
         val sess = session ?: error("CtdTextDetector not prepared. Call prepare() first.")
 
-        val srcW = bitmap.width
-        val srcH = bitmap.height
-        Log.d(TAG, "detect(${srcW}x${srcH}) start")
+        val srcW = image.width
+        val srcH = image.height
+        Log.d(TAG, "infer(${srcW}x${srcH}) start")
 
         // ---- 1. Letterbox to 1024×1024 ------------------------------------
-        val lb = letterbox(bitmap, INPUT_SIZE, STRIDE)
+        val lb = letterbox(image, INPUT_SIZE, STRIDE)
         val ratio = lb.ratio
         val dw = lb.dw
         val dh = lb.dh
@@ -174,21 +185,12 @@ class CtdTextDetector(
                 val scaledPoints = quad.points.map { p ->
                     PointF(p.x * factorX, p.y * factorY)
                 }
-                val sortedPoints = Quadrilateral.sortPoints(scaledPoints)
+                val sortedPoints = Quadrilateral.sortPoints(scaledPoints).first
                 val minX = sortedPoints.minOf { it.x }
-                val maxX = sortedPoints.maxOf { it.x }
-                val minY = sortedPoints.minOf { it.y }
-                val maxY = sortedPoints.maxOf { it.y }
-                val direction = if ((maxX - minX) >= (maxY - minY)) {
-                    TextDirection.HORIZONTAL
-                } else {
-                    TextDirection.VERTICAL
-                }
                 Quadrilateral(
                     points = sortedPoints,
                     text = "",
                     probability = quad.probability,
-                    direction = direction,
                 )
             }
 
@@ -202,7 +204,7 @@ class CtdTextDetector(
                 srcW, srcH,
             )
 
-            DetectionResult(textlines = scaledQuads, rawMask = maskBitmap, mask = null)
+            Triple(scaledQuads, maskBitmap, null)
         } finally {
             results.close()
             tensor.close()
@@ -266,52 +268,37 @@ class CtdTextDetector(
         val results = mutableListOf<Quadrilateral>()
 
         for (contour in contours) {
+            var point2f: MatOfPoint2f? = null
+            var expanded: MatOfPoint? = null
+            var expandedP2f: MatOfPoint2f? = null
             try {
-                if (results.size >= MAX_CANDIDATES) {
-                    contour.release()
-                    continue
-                }
+                if (results.size >= MAX_CANDIDATES) { continue }
 
                 val area = Imgproc.contourArea(contour)
-                if (area < 3.0) {
-                    contour.release()
-                    continue
-                }
+                if (area < 3.0) { continue }
 
                 // 3. minAreaRect
-                val point2f = MatOfPoint2f(*contour.toArray())
+                point2f = MatOfPoint2f(*contour.toArray())
                 val rect = Imgproc.minAreaRect(point2f)
                 val rectPoints = Array(4) { Point() }
                 rect.points(rectPoints)
 
                 // 4. box_score_fast: mean of pred values inside rotated rect
                 val score = boxScoreFast(shrinkMap, rectPoints, h, w)
-                if (score < BOX_THRESH) {
-                    point2f.release()
-                    contour.release()
-                    continue
-                }
+                if (score < BOX_THRESH) { continue }
 
                 // 5. Unclip polygon
                 val perimeter = Imgproc.arcLength(point2f, true)
                 val unclipDist = area * UNCLIP_RATIO / maxOf(perimeter, 1.0)
-                val expanded = unclipPolygon(contour, unclipDist)
-                point2f.release()
+                expanded = unclipPolygon(contour, unclipDist)
 
-                if (expanded.size().area() < 3.0) {
-                    expanded.release()
-                    contour.release()
-                    continue
-                }
+                if (expanded.size().area() < 3.0) { continue }
 
                 // 6. minAreaRect of expanded polygon
-                val expandedP2f = MatOfPoint2f(*expanded.toArray())
+                expandedP2f = MatOfPoint2f(*expanded.toArray())
                 val expandedRect = Imgproc.minAreaRect(expandedP2f)
                 val expandedPts = Array(4) { Point() }
                 expandedRect.points(expandedPts)
-                expandedP2f.release()
-                expanded.release()
-                contour.release()
 
                 val pts = expandedPts.map { PointF(it.x.toFloat(), it.y.toFloat()) }
                 // Ensure valid quadrilateral (non-zero area)
@@ -321,7 +308,11 @@ class CtdTextDetector(
                 results.add(quad)
             } catch (e: Exception) {
                 Log.w(TAG, "Contour processing failed", e)
-                // Release contour safely
+            } finally {
+                // Always release all Mats — each is null-safe and exception-safe
+                point2f?.let { try { it.release() } catch (_: Exception) {} }
+                expanded?.let { try { it.release() } catch (_: Exception) {} }
+                expandedP2f?.let { try { it.release() } catch (_: Exception) {} }
                 try { contour.release() } catch (_: Exception) {}
             }
         }

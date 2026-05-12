@@ -34,10 +34,10 @@ class DefaultTextlineMergerTest {
         x3: Float, y3: Float, x4: Float, y4: Float,
         direction: TextDirection = TextDirection.AUTO,
     ): Quadrilateral = Quadrilateral(
-        points = Quadrilateral.sortPoints(
+        points = Quadrilateral.sortPointsLegacy(
             listOf(pt(x1, y1), pt(x2, y2), pt(x3, y3), pt(x4, y4)),
         ),
-        direction = direction,
+        _direction = direction,
         probability = 0.8f,
     )
 
@@ -239,14 +239,14 @@ class DefaultTextlineMergerTest {
     @Test
     fun `merge creates TextBlock with aggregated text`() = runBlocking {
         val q1 = Quadrilateral(
-            points = Quadrilateral.sortPoints(
+            points = Quadrilateral.sortPointsLegacy(
                 listOf(pt(0f, 0f), pt(4f, 0f), pt(4f, 4f), pt(0f, 4f)),
             ),
             text = "Hello",
             probability = 0.8f,
         )
         val q2 = Quadrilateral(
-            points = Quadrilateral.sortPoints(
+            points = Quadrilateral.sortPointsLegacy(
                 listOf(pt(4f, 0f), pt(8f, 0f), pt(8f, 4f), pt(4f, 4f)),
             ),
             text = "World",

@@ -7,6 +7,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Log
+import com.sakuravillager.manga_translator.data.logging.AppLogger
 import com.sakuravillager.manga_translator.translation.api.TextRecognizer
 import com.sakuravillager.manga_translator.translation.data.Quadrilateral
 import com.sakuravillager.manga_translator.translation.data.TextDirection
@@ -53,7 +54,9 @@ class Model48pxTextRecognizer(
 
     companion object {
         const val TEXT_HEIGHT = 48
-        const val MAX_CHUNK_SIZE = 16
+        // Keep as 1 until ONNX model is re-exported with dynamic batch support.
+        // The current export hardcodes batch=1 inside MultiheadAttention's reshape node.
+        const val MAX_CHUNK_SIZE = 1
         const val TAG = "CtcRecognizer"
 
         /**
@@ -65,31 +68,35 @@ class Model48pxTextRecognizer(
         private const val MAX_INPUT_TENSOR_BYTES = 10 * 1024 * 1024L
 
         fun normalizePixel(px: Int): Triple<Float, Float, Float> {
-            val r = ((px shr 16) and 0xFF) / 127.5f - 1f
-            val g = ((px shr 8) and 0xFF) / 127.5f - 1f
-            val b = (px and 0xFF) / 127.5f - 1f
+            // Normalize to [0, 1] range (matching Python OCR models that use / 255.0)
+            val r = ((px shr 16) and 0xFF) / 255f
+            val g = ((px shr 8) and 0xFF) / 255f
+            val b = (px and 0xFF) / 255f
             return Triple(r, g, b)
         }
     }
 
     override suspend fun prepare() {
+        AppLogger.i(TAG, "[OCR-IMPL] Loading model from assets/models/ocr_ctc_48px.onnx ...")
         val modelBytes = context.assets.open("models/ocr_ctc_48px.onnx").use { it.readBytes() }
+        AppLogger.i(TAG, "[OCR-IMPL] Model bytes read: ${modelBytes.size} bytes (${modelBytes.size / 1024} KB)")
         session = env.createSession(modelBytes, OrtSession.SessionOptions())
         OcrDictionary.load(context)
         _isReady = true
+        AppLogger.i(TAG, "[OCR-IMPL] Model loaded, dictionary size=${OcrDictionary.size}, BLANK=${OcrDictionary.BLANK}")
 
         // Log model I/O specs for parity debugging
         val sess = session!!
-        Log.i(TAG, "CTC OCR model loaded (${modelBytes.size / 1024} KB)")
-        Log.i(TAG, "Model input names: ${sess.inputNames}")
-        Log.i(TAG, "Model output names: ${sess.outputNames}")
+        AppLogger.i(TAG, "CTC OCR model loaded (${modelBytes.size / 1024} KB)")
+        AppLogger.i(TAG, "Model input names: ${sess.inputNames}")
+        AppLogger.i(TAG, "Model output names: ${sess.outputNames}")
         for (name in sess.inputNames) {
             val info = sess.getInputInfo().getValue(name)
-            Log.i(TAG, "Input '$name' info: $info")
+            AppLogger.i(TAG, "Input '$name' info: $info")
         }
         for (name in sess.outputNames) {
             val info = sess.getOutputInfo().getValue(name)
-            Log.i(TAG, "Output '$name' info: $info")
+            AppLogger.i(TAG, "Output '$name' info: $info")
         }
     }
 
@@ -104,13 +111,24 @@ class Model48pxTextRecognizer(
         textlines: List<Quadrilateral>,
         config: OcrConfig,
     ): List<Quadrilateral> {
-        if (textlines.isEmpty() || session == null) return textlines
+        if (textlines.isEmpty() || session == null) {
+            AppLogger.i(TAG, "[OCR-IMPL] Early return: textlines=${textlines.size}, session=${session}")
+            return textlines
+        }
         val sess = session!!
+        AppLogger.i(TAG, "[OCR-IMPL] Start: regions=${textlines.size}, engine=${config.ocrEngine}, img=${bitmap.width}x${bitmap.height}")
         Log.d(TAG, "recognize() start: regions=${textlines.size}, engine=${config.ocrEngine}")
 
         // 1. Mirror Python's _generate_text_direction(): build components first,
         // then assign a shared direction per connected component.
         val grouped = generateTextDirections(textlines)
+        // Log each quad's direction for diagnosis
+        textlines.forEachIndexed { i, q ->
+            AppLogger.i(TAG, "[OCR-IMPL] quad[$i]: area=${"%.1f".format(q.area)} AR=${"%.2f".format(q.aspectRatio)} pts=${q.points.size} dir=${q.direction}")
+        }
+        // Log grouped directions
+        val groupDirs = grouped.map { (_, _, d) -> d }.distinct()
+        AppLogger.i(TAG, "[OCR-IMPL] grouped: ${grouped.size} items, directions=${groupDirs}")
 
         // Optional debug directory for saving crop images and token traces.
         val debugRoot = if (config.debugSaveCrops || config.debugSaveTokens) {
@@ -119,13 +137,25 @@ class Model48pxTextRecognizer(
         debugRoot?.mkdirs()
 
         // 2. Extract regions in the same order as the Python OCR model.
-        val regions = grouped.map { (origIdx, quad, direction) ->
+        val regions = grouped.mapIndexed { gi, (origIdx, quad, direction) ->
             val cropDirection = when (direction) {
                 TextDirection.VERTICAL -> TextDirection.VERTICAL
                 TextDirection.HORIZONTAL_RTL, TextDirection.HORIZONTAL, TextDirection.AUTO -> TextDirection.HORIZONTAL
             }
             val crop = quad.getTransformedRegion(bitmap, cropDirection, TEXT_HEIGHT, debugRoot)
                 ?: Bitmap.createBitmap(1, TEXT_HEIGHT, Bitmap.Config.ARGB_8888)
+            if (gi < 3) {
+                AppLogger.i(TAG, "[OCR-IMPL] crop[$origIdx]: groupDir=${direction} cropDir=${cropDirection} cropSize=${crop.width}x${crop.height}")
+            }
+            // Sample a few pixels from the crop to verify it has content
+            if (origIdx == 0) {
+                val samplePixels = IntArray(minOf(10, crop.width * crop.height))
+                crop.getPixels(samplePixels, 0, minOf(crop.width, samplePixels.size), 0, 0, minOf(crop.width, samplePixels.size), 1)
+                val avgR = samplePixels.map { ((it shr 16) and 0xFF) }.average().toInt()
+                val avgG = samplePixels.map { ((it shr 8) and 0xFF) }.average().toInt()
+                val avgB = samplePixels.map { (it and 0xFF) }.average().toInt()
+                AppLogger.i(TAG, "[OCR-IMPL] Crop#0: ${crop.width}x${crop.height}, avg RGB=($avgR,$avgG,$avgB), first px=#${Integer.toHexString(samplePixels[0])}")
+            }
             Log.d(TAG, "region#$origIdx: direction=$cropDirection, cropSize=${crop.width}x${crop.height}, quadPoints=${quad.points.size}")
             crop
         }
@@ -172,7 +202,10 @@ class Model48pxTextRecognizer(
             val batchIndices = sortedIndices.subList(batchStart, batchEnd)
             val N = batchIndices.size
             val widths = batchIndices.map { regions[it].width }
-            val maxW = 4 * ((widths.maxOrNull() ?: 1) + 7) / 4
+            // Python reference adds +128 padding (model_48px_ctc.py L84):
+            //   max_width = (4 * (max(widths) + 7) // 4) + 128
+            // Without this, the ResNet backbone output is too narrow for the Transformer encoder.
+            val maxW = 4 * ((widths.maxOrNull() ?: 1) + 7) / 4 + 128
 
             // 2b. Build input tensor: [N, 3, 48, maxW], float32, normalized to [-1, 1]
             val tensorSize = N * 3 * TEXT_HEIGHT * maxW
@@ -251,7 +284,10 @@ class Model48pxTextRecognizer(
                             }
                         }
                         if (t < 10) {
-                            argmaxTrace.append("t$t=$maxIdx(${String.format("%.2f", maxVal)}) ")
+                            argmaxTrace.append("$maxIdx/${String.format("%.2f", maxVal)} ")
+                        }
+                        if (t == 0) {
+                            AppLogger.i(TAG, "[OCR-IMPL] t0 argmax=$maxIdx val=${String.format("%.4f", maxVal)} BLANK=$OcrDictionary.BLANK D=$D")
                         }
                         if (maxIdx != OcrDictionary.BLANK && maxIdx != lastId) {
                             decoded.add(maxIdx to maxVal)
@@ -310,7 +346,10 @@ class Model48pxTextRecognizer(
             batchStart = batchEnd
         }
 
-        return OcrPostProcessor.refine(results)
+        val refined = OcrPostProcessor.refine(results)
+        val nonBlankCount = refined.count { it.text.isNotBlank() }
+        AppLogger.i(TAG, "[OCR-IMPL] Done: ${refined.size} regions, nonBlank=$nonBlankCount, texts=${refined.take(5).map { "'${it.text}'" }}")
+        return refined
     }
 
     private fun generateTextDirections(textlines: List<Quadrilateral>): List<Triple<Int, Quadrilateral, TextDirection>> {

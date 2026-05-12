@@ -84,14 +84,14 @@ class QuadrilateralGeometryTest {
     @Test
     fun `test sortPoints returns four points`() {
         val shuffled = listOf(pt(0f, 0f), pt(10f, 10f), pt(0f, 10f), pt(10f, 0f))
-        val result = Quadrilateral.sortPoints(shuffled)
+        val (result, _) = Quadrilateral.sortPoints(shuffled)
         assertEquals(4, result.size)
     }
 
     @Test
     fun `test sortPoints all input points present in output`() {
         val shuffled = listOf(pt(0f, 0f), pt(10f, 10f), pt(0f, 10f), pt(10f, 0f))
-        val result = Quadrilateral.sortPoints(shuffled)
+        val (result, _) = Quadrilateral.sortPoints(shuffled)
         for (p in shuffled) {
             val found = result.any { r -> kotlin.math.abs(r.x - p.x) < 0.001f && kotlin.math.abs(r.y - p.y) < 0.001f }
             assertTrue(found)
@@ -101,7 +101,7 @@ class QuadrilateralGeometryTest {
     @Test
     fun `test sortPoints first point is top-left`() {
         val shuffled = listOf(pt(10f, 10f), pt(0f, 10f), pt(10f, 0f), pt(0f, 0f))
-        val result = Quadrilateral.sortPoints(shuffled)
+        val (result, _) = Quadrilateral.sortPoints(shuffled)
         assertEquals(0f, result[0].x, 0.001f)
         assertEquals(0f, result[0].y, 0.001f)
     }
@@ -109,18 +109,19 @@ class QuadrilateralGeometryTest {
     @Test
     fun `test sortPoints returns consistent cyclic order`() {
         val shuffled = listOf(pt(0f, 0f), pt(10f, 10f), pt(0f, 10f), pt(10f, 0f))
-        val result = Quadrilateral.sortPoints(shuffled)
-        // Expected: TL(0,0), BL(0,10), BR(10,10), TR(10,0)
+        val (result, _) = Quadrilateral.sortPoints(shuffled)
+        // New Python sort_pnts returns [TL, TR, BR, BL] (clockwise)
         assertEquals(0f, result[0].x, 0.001f); assertEquals(0f, result[0].y, 0.001f)   // TL
-        assertEquals(0f, result[1].x, 0.001f); assertEquals(10f, result[1].y, 0.001f)  // BL
+        assertEquals(10f, result[1].x, 0.001f); assertEquals(0f, result[1].y, 0.001f)  // TR
         assertEquals(10f, result[2].x, 0.001f); assertEquals(10f, result[2].y, 0.001f) // BR
-        assertEquals(10f, result[3].x, 0.001f); assertEquals(0f, result[3].y, 0.001f)  // TR
+        assertEquals(0f, result[3].x, 0.001f); assertEquals(10f, result[3].y, 0.001f)  // BL
     }
 
     @Test
     fun `test sortPoints returns same order for already sorted input`() {
-        val alreadySorted = listOf(pt(0f, 0f), pt(0f, 10f), pt(10f, 10f), pt(10f, 0f))
-        val result = Quadrilateral.sortPoints(alreadySorted)
+        // New sort_pnts order: [TL, TR, BR, BL]
+        val alreadySorted = listOf(pt(0f, 0f), pt(10f, 0f), pt(10f, 10f), pt(0f, 10f))
+        val (result, _) = Quadrilateral.sortPoints(alreadySorted)
         for (i in alreadySorted.indices) {
             assertEquals(alreadySorted[i].x, result[i].x, 0.001f)
             assertEquals(alreadySorted[i].y, result[i].y, 0.001f)

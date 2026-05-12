@@ -3,7 +3,10 @@ package com.sakuravillager.manga_translator.translation.data
 import android.graphics.Bitmap
 import android.graphics.PointF
 import android.graphics.RectF
+import com.sakuravillager.manga_translator.data.logging.AppLogger
 import com.sakuravillager.manga_translator.translation.util.polygonDistance
+import com.sakuravillager.manga_translator.translation.util.euclideanDistance
+import com.sakuravillager.manga_translator.translation.util.pointToSegmentDistance
 import kotlin.math.abs
 import kotlin.math.acos
 import kotlin.math.atan2
@@ -22,12 +25,19 @@ data class Quadrilateral(
     val points: List<PointF>,
     val text: String = "",
     val probability: Float = 0f,
-    val direction: TextDirection = TextDirection.AUTO,
+    private val _direction: TextDirection = TextDirection.AUTO,
     val sourceIndex: Int? = null,
     val readingOrderIndex: Int? = null,
     val fgColor: Int? = null,
     val bgColor: Int? = null,
 ) {
+    /** Direction of this quadrilateral. When AUTO, determined by sortPoints (matching Python sort_pnts). */
+    val direction: TextDirection
+        get() {
+            if (_direction != TextDirection.AUTO) return _direction
+            val (_, isVertical) = sortPoints(points)
+            return if (isVertical) TextDirection.VERTICAL else TextDirection.HORIZONTAL
+        }
     private fun pointF(x: Float, y: Float): PointF {
         return PointF().apply {
             this.x = x
@@ -39,10 +49,12 @@ data class Quadrilateral(
 
     val structure: List<PointF> get() {
         if (points.size < 4) return emptyList()
-        val v1 = mid(points[0], points[1])  // top edge midpoint
-        val v2 = mid(points[2], points[3])  // bottom edge midpoint
-        val v3 = mid(points[1], points[2])  // right edge midpoint
-        val v4 = mid(points[3], points[0])  // left edge midpoint
+        // Sort points to [TL, TR, BR, BL] (clockwise), matching Python sort_pnts.
+        val (p, _) = sortPoints(points)
+        val v1 = mid(p[0], p[1])  // TL+TR = top edge midpoint
+        val v2 = mid(p[2], p[3])  // BR+BL = bottom edge midpoint
+        val v3 = mid(p[1], p[2])  // TR+BR = right edge midpoint
+        val v4 = mid(p[3], p[0])  // BL+TL = left edge midpoint
         return listOf(v1, v2, v3, v4)
     }
 
@@ -128,6 +140,42 @@ data class Quadrilateral(
         return isNearAxis(topToBottom) || isNearAxis(rightToLeft)
     }
 
+    val isAxisAligned: Boolean get() {
+        val s = structure
+        if (s.size < 4) return false
+        val v1x = s[1].x - s[0].x; val v1y = s[1].y - s[0].y
+        val v2x = s[2].x - s[3].x; val v2y = s[2].y - s[3].y
+        val norm1 = sqrt(v1x * v1x + v1y * v1y)
+        val norm2 = sqrt(v2x * v2x + v2y * v2y)
+        if (norm1 == 0f || norm2 == 0f) return false
+        val u1x = v1x / norm1; val u1y = v1y / norm1
+        val u2x = v2x / norm2; val u2y = v2y / norm2
+        return (abs(u1x) < 0.01f || abs(u1y) < 0.01f) && (abs(u2x) < 0.01f || abs(u2y) < 0.01f)
+    }
+
+    /** Direction cosine of the main axis (dot with horizontal unit vector). Matches Python `cosangle` (generic.py L510-515). */
+    val cosangle: Float get() {
+        val s = structure
+        if (s.size < 4) return 0f
+        val vx = s[1].x - s[0].x; val vy = s[1].y - s[0].y
+        val len = sqrt(vx * vx + vy * vy)
+        if (len == 0f) return 0f
+        return vx / len
+    }
+
+    /** Minimum distance from a point to this quadrilateral (edges + vertices). Matches Python `distance_to_point()` (generic.py L525-530). */
+    fun distanceToPoint(p: PointF): Float {
+        if (points.size < 4) return Float.MAX_VALUE
+        var d = Float.MAX_VALUE
+        for (i in 0 until 4) {
+            val p1 = points[i]
+            val p2 = points[(i + 1) % 4]
+            d = minOf(d, euclideanDistance(p1, p),
+                pointToSegmentDistance(p.x, p.y, p1.x, p1.y, p2.x, p2.y))
+        }
+        return d
+    }
+
     fun polyDistance(other: Quadrilateral): Float {
         return polygonDistance(points, other.points)
     }
@@ -167,11 +215,9 @@ data class Quadrilateral(
             return Bitmap.createBitmap(textHeight.coerceAtLeast(1), textHeight.coerceAtLeast(1), Bitmap.Config.ARGB_8888)
         }
 
-        val srcPts = sortPoints(points).map { PointF(it.x, it.y) }.toMutableList()
-        // sortPoints returns [TL, TR, BR, BL] (clockwise).
-        // Python uses [TL, BL, BR, TR] (counter-clockwise starting from top-left).
-        // Reorder to match Python convention for correct midpoint and homography.
-        val s = listOf(srcPts[0], srcPts[3], srcPts[2], srcPts[1]) // [TL, BL, BR, TR]
+        // sortPoints returns [TL, TR, BR, BL] (clockwise), matching Python sort_pnts.
+        val (sorted, _) = sortPoints(points)
+        val s = sorted.map { PointF(it.x, it.y) }.toMutableList()  // [TL, TR, BR, BL]
         val srcRect = boundingBox
         val imWidth = bitmap.width
         val imHeight = bitmap.height
@@ -196,15 +242,16 @@ data class Quadrilateral(
         } catch (e: Exception) {
             Log.w("Quadrilateral", "Failed to save pre-warp crop: ${e.message}")
         }
-        for (pt in srcPts) {
+        for (pt in s) {
             pt.x -= x1.toFloat()
             pt.y -= y1.toFloat()
         }
 
-        val midTop = PointF((s[0].x + s[3].x) / 2f, (s[0].y + s[3].y) / 2f)
-        val midBottom = PointF((s[1].x + s[2].x) / 2f, (s[1].y + s[2].y) / 2f)
-        val midRight = PointF((s[2].x + s[3].x) / 2f, (s[2].y + s[3].y) / 2f)
-        val midLeft = PointF((s[0].x + s[1].x) / 2f, (s[0].y + s[1].y) / 2f)
+        // s = [TL, TR, BR, BL] clockwise
+        val midTop = PointF((s[0].x + s[1].x) / 2f, (s[0].y + s[1].y) / 2f)     // TL+TR
+        val midBottom = PointF((s[2].x + s[3].x) / 2f, (s[2].y + s[3].y) / 2f)  // BR+BL
+        val midRight = PointF((s[1].x + s[2].x) / 2f, (s[1].y + s[2].y) / 2f)    // TR+BR
+        val midLeft = PointF((s[0].x + s[3].x) / 2f, (s[0].y + s[3].y) / 2f)     // TL+BL
         val vecVx = midBottom.x - midTop.x
         val vecVy = midBottom.y - midTop.y
         val vecHx = midRight.x - midLeft.x
@@ -218,6 +265,7 @@ data class Quadrilateral(
         val ratio = normV / normH
         val (dstW, dstH) = transformedRegionSize(ratio, direction, textHeight)
         val useVertical = direction == TextDirection.VERTICAL
+        AppLogger.i("Quadrilateral", "getTR: dir=$direction useV=$useVertical normV=$normV normH=$normH ratio=$ratio dstW=$dstW dstH=$dstH")
 
         val srcMat = Mat(4, 2, CvType.CV_32F)
         val dstMat = Mat(4, 2, CvType.CV_32F)
@@ -309,22 +357,56 @@ data class Quadrilateral(
             }
         }
 
-        fun sortPoints(pts: List<PointF>): List<PointF> {
-            if (pts.size != 4) return pts
-
-            val cx = pts.map { it.x.toDouble() }.average()
-            val cy = pts.map { it.y.toDouble() }.average()
-
-            // Sort clockwise by angle from centroid
-            val sorted = pts.sortedBy { p ->
-                -atan2((p.y - cy).toDouble(), (p.x - cx).toDouble())
+        /**
+         * Sorts 4 quadrilateral points into [TL, TR, BR, BL] clockwise order,
+         * and determines whether the quad is vertical (H < W).
+         *
+         * Exact port of Python's sort_pnts (utils/generic.py L324-353).
+         */
+        fun sortPoints(pts: List<PointF>): Pair<List<PointF>, Boolean> {
+            if (pts.size != 4) return pts to false
+            // Compute all 16 pairwise vectors (4 points × 4 points)
+            val p = pts.toTypedArray()
+            val pairwiseVectors = Array(16) { FloatArray(2) }
+            for (i in 0 until 4) {
+                for (j in 0 until 4) {
+                    pairwiseVectors[i * 4 + j][0] = p[i].x - p[j].x
+                    pairwiseVectors[i * 4 + j][1] = p[i].y - p[j].y
+                }
             }
+            // Find the 2 longest sides (indices 8 and 10 in sorted norms)
+            val norms = pairwiseVectors.map { kotlin.math.sqrt(it[0] * it[0] + it[1] * it[1]) }
+            // np.argsort is ascending; match Python exactly
+            val sortedNorms = norms.withIndex().sortedBy { it.value }
+            val longSide1 = pairwiseVectors[sortedNorms[8].index]
+            val longSide2 = pairwiseVectors[sortedNorms[10].index]
+            // Align directions if inner product is negative
+            val innerProd = longSide1[0] * longSide2[0] + longSide1[1] * longSide2[1]
+            if (innerProd < 0) { longSide1[0] = -longSide1[0]; longSide1[1] = -longSide1[1] }
+            val strucX = kotlin.math.abs(longSide1[0] + longSide2[0]) / 2f
+            val strucY = kotlin.math.abs(longSide1[1] + longSide2[1]) / 2f
+            val isVertical = strucX <= strucY
 
-            // Rotate so top-left (minimum x + y) is first
-            val tlIdx = sorted.indices.minByOrNull { sorted[it].x + sorted[it].y } ?: 0
-            return if (tlIdx == 0) sorted
-            else sorted.subList(tlIdx, 4) + sorted.subList(0, tlIdx)
+            // Sort: Python-style (matching sort_pnts)
+            val sorted = pts.toMutableList()
+            if (isVertical) {
+                sorted.sortBy { it.y }  // sort by y
+                // Top 2: sort by x ascending; bottom 2: sort by x descending
+                val top = sorted.subList(0, 2).sortedBy { it.x }
+                val bot = sorted.subList(2, 4).sortedByDescending { it.x }
+                return (top + bot) to true     // [TL, TR, BR, BL]
+            } else {
+                sorted.sortBy { it.x }  // sort by x
+                // Left 2: sort by y ascending; right 2: sort by y ascending
+                val left = sorted.subList(0, 2).sortedBy { it.y }
+                val right = sorted.subList(2, 4).sortedBy { it.y }
+                val result = mutableListOf(left[0], right[0], right[1], left[1])
+                return result to false  // [TL, TR, BR, BL]
+            }
         }
+
+        /** Old API — returns sorted points only. */
+        fun sortPointsLegacy(pts: List<PointF>): List<PointF> = sortPoints(pts).first
     }
 }
 

@@ -73,16 +73,34 @@ class CompleteMaskRefiner : MaskRefiner {
         kernelSize: Int,
         dilationOffset: Int,
     ): Bitmap {
-        val width = bitmap.width
-        val height = bitmap.height
+        // scale_factor matching Python mask_refinement/__init__.py L12:
+        //   scale_factor = max(min((mask_H - image_H/3) / mask_H, 1), 0.5)
+        val scaleFactor = if (rawMask != null) {
+            kotlin.math.max(kotlin.math.min((rawMask.height.toFloat() - bitmap.height.toFloat() / 3f) / rawMask.height.toFloat().coerceAtLeast(1f), 1f), 0.5f)
+        } else 1f
+
+        val (procBitmap, procMask, procScale) = if (scaleFactor < 1f && rawMask != null) {
+            val newW = (bitmap.width * scaleFactor).toInt()
+            val newH = (bitmap.height * scaleFactor).toInt()
+            val imgResized = Bitmap.createScaledBitmap(bitmap, newW, newH, true)
+            val maskResized = Bitmap.createScaledBitmap(rawMask, newW, newH, true)
+            Triple(imgResized, maskResized, scaleFactor)
+        } else {
+            Triple(bitmap, rawMask, 1f)
+        }
+
+        val width = procBitmap.width
+        val height = procBitmap.height
 
         // --- Flatten TextBlocks into individual text lines ---------------
         val textLines = mutableListOf<TextLineInfo>()
+        // Scale text line coordinates by scaleFactor to match resized image
+        val s = procScale
         for (region in textRegions) {
             for (line in region.lines) {
                 if (line.size < 4) continue
-                val xs = line.map { it.x }
-                val ys = line.map { it.y }
+                val xs = line.map { it.x * s }
+                val ys = line.map { it.y * s }
                 val rect = RectF(xs.min(), ys.min(), xs.max(), ys.max())
                 textLines.add(TextLineInfo(rect, region.fontSize))
             }
@@ -96,8 +114,8 @@ class CompleteMaskRefiner : MaskRefiner {
         try {
             // --- Step 1-2: Create & binarise mask -------------------------
             val maskMat: Mat = when {
-                rawMask != null -> {
-                    val rawMat = bitmapToMat(rawMask).also { ownedMats.add(it) }
+                procMask != null -> {
+                    val rawMat = bitmapToMat(procMask).also { ownedMats.add(it) }
                     val gray = Mat().also { ownedMats.add(it) }
                     Imgproc.cvtColor(rawMat, gray, Imgproc.COLOR_RGBA2GRAY)
                     gray
@@ -108,7 +126,8 @@ class CompleteMaskRefiner : MaskRefiner {
 
             // If there are no text lines just return the (binarised) mask
             if (M == 0) {
-                return matToBitmap(maskMat)
+                val bmp = matToBitmap(maskMat)
+                return if (procScale < 1f) Bitmap.createScaledBitmap(bmp, bitmap.width, bitmap.height, true).also { bmp.recycle() } else bmp
             }
 
             // --- Step 3: Draw filled white text bboxes on the mask --------
@@ -247,7 +266,8 @@ class CompleteMaskRefiner : MaskRefiner {
 
             if (!valid) {
                 // No CCs were assigned — return the original (binarised) mask
-                return matToBitmap(maskMat)
+                val bmp = matToBitmap(maskMat)
+                return if (procScale < 1f) Bitmap.createScaledBitmap(bmp, bitmap.width, bitmap.height, true).also { bmp.recycle() } else bmp
             }
 
             // Convert textline rects from (l, t, r, b) → (x, y, w, h)
@@ -368,7 +388,12 @@ class CompleteMaskRefiner : MaskRefiner {
             }
 
             // --- Convert result to Bitmap --------------------------------
-            return matToBitmap(finalMask)
+            val resultBitmap = matToBitmap(finalMask)
+            // Scale back to original dimensions if downscaled (matching Python L28)
+            return if (procScale < 1f) {
+                Bitmap.createScaledBitmap(resultBitmap, bitmap.width, bitmap.height, true)
+                    .also { if (it !== resultBitmap) resultBitmap.recycle() }
+            } else resultBitmap
 
         } finally {
             for (m in ownedMats) {
