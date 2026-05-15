@@ -56,16 +56,106 @@ fun letterbox(bitmap: Bitmap, targetSize: Int, stride: Int = 64): LetterboxResul
     return LetterboxResult(bitmap = result, ratio = ratio, dw = dw, dh = dh)
 }
 
-/**
- * Creates a new bitmap resized to the specified dimensions.
- *
- * @param bitmap The source bitmap.
- * @param width  Target width in pixels.
- * @param height Target height in pixels.
- * @return A new [Bitmap] of the requested size.
- */
-fun resizeBitmap(bitmap: Bitmap, width: Int, height: Int): Bitmap {
-    return Bitmap.createScaledBitmap(bitmap, width, height, true)
+fun load_image(img: Bitmap): Pair<Bitmap, Bitmap?> {
+    val source = if (img.config == Bitmap.Config.ARGB_8888) img else img.copy(Bitmap.Config.ARGB_8888, false)
+    return if (source.hasAlpha() || source.config == Bitmap.Config.ALPHA_8) {
+        val alpha_ch = source.extractAlpha()
+        val background = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(background)
+        canvas.drawColor(Color.WHITE)
+        canvas.drawBitmap(source, 0f, 0f, null)
+        background to alpha_ch
+    } else {
+        val background = Bitmap.createBitmap(source.width, source.height, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(background)
+        canvas.drawColor(Color.WHITE)
+        canvas.drawBitmap(source, 0f, 0f, null)
+        background to null
+    }
+}
+
+fun dump_image(img_pil: Bitmap, img: Bitmap, alpha_ch: Bitmap? = null): Bitmap {
+    val width = img.width
+    val height = img.height
+    val result = if (img_pil.width == width && img_pil.height == height) {
+        if (img_pil.config == Bitmap.Config.ARGB_8888) img_pil.copy(Bitmap.Config.ARGB_8888, true) else img_pil.copy(Bitmap.Config.ARGB_8888, true)
+    } else {
+        Bitmap.createScaledBitmap(img_pil, width, height, true).copy(Bitmap.Config.ARGB_8888, true)
+    }
+
+    val source = if (alpha_ch != null) {
+        combine_alpha(img, alpha_ch)
+    } else {
+        if (img.config == Bitmap.Config.ARGB_8888) img else img.copy(Bitmap.Config.ARGB_8888, false)
+    }
+
+    val canvas = Canvas(result)
+    canvas.drawBitmap(source, 0f, 0f, null)
+    if (source !== img && source !== img_pil) {
+        source.recycle()
+    }
+    return result
+}
+
+private fun combine_alpha(img: Bitmap, alpha_ch: Bitmap): Bitmap {
+    val width = img.width
+    val height = img.height
+    val rgbSource = if (img.width == width && img.height == height) {
+        if (img.config == Bitmap.Config.ARGB_8888) img else img.copy(Bitmap.Config.ARGB_8888, false)
+    } else {
+        Bitmap.createScaledBitmap(img, width, height, true).copy(Bitmap.Config.ARGB_8888, false)
+    }
+    val alphaSource = if (alpha_ch.width == width && alpha_ch.height == height) {
+        if (alpha_ch.config == Bitmap.Config.ARGB_8888) alpha_ch else alpha_ch.copy(Bitmap.Config.ARGB_8888, false)
+    } else {
+        Bitmap.createScaledBitmap(alpha_ch, width, height, true).copy(Bitmap.Config.ARGB_8888, false)
+    }
+
+    val rgbPixels = IntArray(width * height)
+    val alphaPixels = IntArray(width * height)
+    rgbSource.getPixels(rgbPixels, 0, width, 0, 0, width, height)
+    alphaSource.getPixels(alphaPixels, 0, width, 0, 0, width, height)
+
+    val outPixels = IntArray(width * height)
+    for (index in outPixels.indices) {
+        val alpha = (alphaPixels[index] ushr 24) and 0xFF
+        outPixels[index] = (alpha shl 24) or (rgbPixels[index] and 0x00FFFFFF)
+    }
+
+    val result = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    result.setPixels(outPixels, 0, width, 0, 0, width, height)
+
+    if (rgbSource !== img) {
+        rgbSource.recycle()
+    }
+    if (alphaSource !== alpha_ch) {
+        alphaSource.recycle()
+    }
+    return result
+}
+
+fun resize_keep_aspect(img: Bitmap, size: Int): Bitmap {
+    val ratio = size.toFloat() / maxOf(img.width, img.height)
+    val new_width = (img.width * ratio).roundToInt().coerceAtLeast(1)
+    val new_height = (img.height * ratio).roundToInt().coerceAtLeast(1)
+    return Bitmap.createScaledBitmap(img, new_width, new_height, true)
+}
+
+fun image_resize(image: Bitmap, width: Int? = null, height: Int? = null): Bitmap {
+    if (width == null && height == null) return image
+
+    val (targetWidth, targetHeight) = when {
+        width == null -> {
+            val ratio = height!!.toFloat() / image.height.toFloat()
+            val newWidth = (image.width * ratio).toInt()
+            newWidth to height
+        }
+        else -> {
+            val ratio = width.toFloat() / image.width.toFloat()
+            width to (image.height * ratio).toInt()
+        }
+    }
+    return Bitmap.createScaledBitmap(image, targetWidth, targetHeight, true)
 }
 
 /**
@@ -80,13 +170,13 @@ fun resizeBitmap(bitmap: Bitmap, width: Int, height: Int): Bitmap {
  * @param maxSize The maximum allowed pixel size for the longest dimension.
  * @return The downsampled bitmap, or the original if already within limits.
  */
-fun downsampleToMaxSize(bitmap: Bitmap, maxSize: Int): Bitmap {
+fun downsample_to_max_size(bitmap: Bitmap, max_size: Int): Bitmap {
     val width = bitmap.width
     val height = bitmap.height
     val maxDimension = maxOf(width, height)
-    if (maxDimension <= maxSize) return bitmap
+    if (maxDimension <= max_size) return bitmap
 
-    val scale = maxSize.toFloat() / maxDimension
+    val scale = max_size.toFloat() / maxDimension
     val newWidth = (width * scale).toInt().coerceAtLeast(1)
     val newHeight = (height * scale).toInt().coerceAtLeast(1)
     return Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)

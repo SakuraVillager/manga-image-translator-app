@@ -8,6 +8,8 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.PointF
 import android.util.Log
+import com.sakuravillager.manga_translator.translation.api.TextDetector
+import com.sakuravillager.manga_translator.translation.data.DetectionResult
 import com.sakuravillager.manga_translator.translation.data.Quadrilateral
 import com.sakuravillager.manga_translator.translation.data.TextDirection
 import com.sakuravillager.manga_translator.translation.data.config.DetectorConfig
@@ -36,7 +38,12 @@ class CtdTextDetector private constructor(
     private val modelDownloadManager: ModelDownloadManager,
     private val sessionManager: OnnxSessionManager,
     @Suppress("unused") private val context: Context,
-) : OfflineDetector() {
+) : TextDetector {
+
+    override val name: String = "CtdTextDetector"
+
+    private var _isReady = false
+    override val isReady: Boolean get() = _isReady
 
     private var session: OrtSession? = null
     private val env: OrtEnvironment = OrtEnvironment.getEnvironment()
@@ -76,9 +83,8 @@ class CtdTextDetector private constructor(
     override suspend fun prepare() {
         Log.d(TAG, "Preparing CtdTextDetector…")
         val modelFile = modelDownloadManager.ensureModel(ModelRegistry.CTD_MODEL)
-        val modelBytes = modelFile.readBytes()
-        Log.d(TAG, "Model loaded (${modelBytes.size} bytes), creating ONNX session…")
-        session = sessionManager.createSession(modelBytes)
+        Log.d(TAG, "Model loaded (${modelFile.length()} bytes), creating ONNX session…")
+        session = sessionManager.createSession(modelFile)
         _isReady = true
         Log.d(TAG, "CtdTextDetector ready")
     }
@@ -95,10 +101,10 @@ class CtdTextDetector private constructor(
     // TextDetector
     // -----------------------------------------------------------------------
 
-    override suspend fun infer(
+    override suspend fun detect(
         image: Bitmap,
         config: DetectorConfig,
-    ): Triple<List<Quadrilateral>, Bitmap?, Bitmap?> = withContext(Dispatchers.Default) {
+    ): DetectionResult = withContext(Dispatchers.Default) {
         val sess = session ?: error("CtdTextDetector not prepared. Call prepare() first.")
 
         val srcW = image.width
@@ -204,7 +210,7 @@ class CtdTextDetector private constructor(
                 srcW, srcH,
             )
 
-            Triple(scaledQuads, maskBitmap, null)
+            DetectionResult(scaledQuads, maskBitmap, null)
         } finally {
             results.close()
             tensor.close()

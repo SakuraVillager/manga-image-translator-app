@@ -18,7 +18,6 @@ import com.sakuravillager.manga_translator.translation.data.config.OcrEngineType
 import com.sakuravillager.manga_translator.translation.data.config.TranslationConfig
 import com.sakuravillager.manga_translator.translation.data.config.UpscalerType
 import com.sakuravillager.manga_translator.translation.detection.CtdTextDetector
-import com.sakuravillager.manga_translator.translation.detection.DetectorDispatch
 import com.sakuravillager.manga_translator.translation.merge.DefaultTextlineMerger
 import com.sakuravillager.manga_translator.translation.model.ModelDownloadManager
 import com.sakuravillager.manga_translator.translation.ocr.Model48pxTextRecognizer
@@ -83,7 +82,7 @@ val translationModule = module {
         when (config.detector.detector) {
             DetectorType.CTD -> {
                 CtdTextDetector.initialize(get(), get(), androidContext())
-                DetectorDispatch.getDetector(DetectorType.CTD) as TextDetector
+                CtdTextDetector.getInstance()
             }
             else -> NoOpTextDetector()
         }

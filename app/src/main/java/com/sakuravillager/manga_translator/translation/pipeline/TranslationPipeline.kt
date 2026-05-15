@@ -22,10 +22,12 @@ import com.sakuravillager.manga_translator.translation.data.TranslationContext
 import com.sakuravillager.manga_translator.translation.data.config.ColorizerType
 import com.sakuravillager.manga_translator.translation.data.config.TranslationConfig
 import com.sakuravillager.manga_translator.translation.data.config.TranslatorType
-import com.sakuravillager.manga_translator.translation.util.resizeBitmap
+import com.sakuravillager.manga_translator.translation.util.dump_image
+import com.sakuravillager.manga_translator.translation.util.image_resize
+import com.sakuravillager.manga_translator.translation.util.load_image
 import com.sakuravillager.manga_translator.translation.util.VisualizeUtils
 import com.sakuravillager.manga_translator.translation.sort.RegionSorter
-import com.sakuravillager.manga_translator.translation.util.downsampleToMaxSize
+import com.sakuravillager.manga_translator.translation.util.downsample_to_max_size
 import com.sakuravillager.manga_translator.translation.dict.DictionaryLoader
 import com.sakuravillager.manga_translator.translation.mask.BubbleDetector
 import com.sakuravillager.manga_translator.translation.pipeline.RepetitionHallucinationChecker
@@ -106,7 +108,7 @@ class TranslationPipeline(
     val progress: StateFlow<TranslationProgress> = _progress.asStateFlow()
 
     suspend fun translate(inputBitmap: Bitmap): TranslationResult {
-        val ctx = TranslationContext(inputBitmap = inputBitmap, config = config)
+        val ctx = TranslationContext(input_bitmap = inputBitmap, config = config)
         AppLogger.i(TAG, "[PIPELINE] Starting translate: ${inputBitmap.width}x${inputBitmap.height}, det=${config.detector.detector}, ocr=${config.ocr.ocrEngine}, trans=${config.translator.translator}")
         return try {
             // Step 0: Prepare
@@ -133,7 +135,7 @@ class TranslationPipeline(
                     // Fallback: keep processingBitmap unchanged
                 }
             }
-            ctx.imgColorized = processingBitmap
+            ctx.img_colorized = processingBitmap
 
             if (config.upscale.upscaleRatio != null && config.upscale.upscaleRatio > 1) {
                 _progress.value = TranslationProgress.Processing("Upscaling image...", 0.08f)
@@ -145,18 +147,20 @@ class TranslationPipeline(
                     // Fallback: keep processingBitmap unchanged
                 }
             }
-            ctx.imgUpscaled = processingBitmap
+            ctx.img_upscaled = processingBitmap
 
             // Step 2: Downsample large images to prevent OOM
             if (maxOf(processingBitmap.width, processingBitmap.height) > config.detector.detectionSize) {
-                processingBitmap = downsampleToMaxSize(processingBitmap, config.detector.detectionSize)
+                processingBitmap = downsample_to_max_size(processingBitmap, config.detector.detectionSize)
             }
-            ctx.originalBitmap = if (processingBitmap !== inputBitmap) inputBitmap else null
-            ctx.imgRgb = processingBitmap
+            ctx.original_bitmap = if (processingBitmap !== inputBitmap) inputBitmap else null
+            val (img_rgb, img_alpha) = load_image(processingBitmap)
+            ctx.img_rgb = img_rgb
+            ctx.img_alpha = img_alpha
 
             // Debug: input.png - after preprocessing (colorize + upscale + downsample)
             if (config.verbose) {
-                ctx.debugImages["input.png"] = processingBitmap.copy(Bitmap.Config.ARGB_8888, false)
+                    ctx.debug_images["input.png"] = img_rgb.copy(Bitmap.Config.ARGB_8888, false)
             }
 
             // Step 3: Detection
@@ -164,19 +168,19 @@ class TranslationPipeline(
             try {
                 val detectionResult = detector.detect(processingBitmap, config.detector)
                 ctx.textlines = detectionResult.textlines.toMutableList()
-                ctx.rawMask = detectionResult.rawMask
+                ctx.raw_mask = detectionResult.rawMask
                 trackModelUsage("detection", config.detector.detector.name)
                 AppLogger.i(TAG, "[DETECT] Found ${ctx.textlines.size} textlines (det=${config.detector.detector}, ${processingBitmap.width}x${processingBitmap.height})")
             } catch (e: Exception) {
                 AppLogger.e(TAG, "[DETECT] Error: ${e.message}", e)
                 if (!config.ignoreErrors) throw e
                 ctx.textlines = mutableListOf()
-                ctx.rawMask = null
+                ctx.raw_mask = null
             }
             // Debug: mask_raw.png and bboxes_unfiltered.png after detection
             if (config.verbose) {
-                ctx.rawMask?.let { ctx.debugImages["mask_raw.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
-                ctx.imgRgb?.let { ctx.debugImages["bboxes_unfiltered.png"] = drawQuadrilaterals(it, ctx.textlines) }
+                ctx.raw_mask?.let { ctx.debug_images["mask_raw.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
+                ctx.img_rgb?.let { ctx.debug_images["bboxes_unfiltered.png"] = drawQuadrilaterals(it, ctx.textlines) }
             }
             if (ctx.textlines.isEmpty()) {
                 AppLogger.i(TAG, "[DETECT-NOTEXT] 0 textlines found (det=${detector.name}, image=${processingBitmap.width}x${processingBitmap.height})")
@@ -216,23 +220,23 @@ class TranslationPipeline(
             // Step 5: Textline merge
             _progress.value = TranslationProgress.Processing("Merging text lines...", 0.35f)
             try {
-                ctx.textRegions = merger.merge(ctx.textlines, processingBitmap.width, processingBitmap.height).toMutableList()
+                ctx.text_regions = merger.merge(ctx.textlines, processingBitmap.width, processingBitmap.height).toMutableList()
             } catch (e: Exception) {
                 Log.e(TAG, "Error during textline merge: ${e.message}", e)
                 if (!config.ignoreErrors) throw e
-                ctx.textRegions = mutableListOf()
+                ctx.text_regions = mutableListOf()
             }
-            if (ctx.textRegions.isEmpty()) {
+            if (ctx.text_regions.isEmpty()) {
                 AppLogger.i(TAG, "[MERGE] NoText: ${ctx.textlines.size} lines → 0 regions (texts=${ctx.textlines.map { it.text }})")
                 return TranslationResult.NoText(processingBitmap)
             }
-            AppLogger.i(TAG, "[MERGE] ${ctx.textlines.size} lines → ${ctx.textRegions.size} regions")
-            ctx.textRegions.take(5).forEachIndexed { i, r ->
+            AppLogger.i(TAG, "[MERGE] ${ctx.textlines.size} lines → ${ctx.text_regions.size} regions")
+            ctx.text_regions.take(5).forEachIndexed { i, r ->
                 AppLogger.i(TAG, "[MERGE]   [$i] '${r.text}' (sz=${r.fontSize}, dir=${r.direction})")
             }
 
-            ctx.textRegions = RegionSorter.sortRegions(
-                ctx.textRegions,
+            ctx.text_regions = RegionSorter.sortRegions(
+                ctx.text_regions,
                 rightToLeft = config.renderer.rtl,
                 image = processingBitmap,
                 forceSimpleSort = config.forceSimpleSort,
@@ -240,23 +244,23 @@ class TranslationPipeline(
 
             // Debug: bboxes.png after textline merge and sorting (visualize_textblocks)
             if (config.verbose) {
-                ctx.debugImages["bboxes.png"] = VisualizeUtils.visualizeTextBlocks(
-                    ctx.imgRgb!!, ctx.textRegions,
+                ctx.debug_images["bboxes.png"] = VisualizeUtils.visualizeTextBlocks(
+                    ctx.img_rgb!!, ctx.text_regions,
                     showPanels = !config.forceSimpleSort,
                     rightToLeft = config.renderer.rtl,
                 )
             }
 
             // Apply pre-dictionary (text replacement before translation)
-            ctx.textRegions = applyPreDictionary(ctx.textRegions, config).toMutableList()
-            AppLogger.i(TAG, "[PRE-DICT] Applied, ${ctx.textRegions.size} regions remain")
+            ctx.text_regions = applyPreDictionary(ctx.text_regions, config).toMutableList()
+            AppLogger.i(TAG, "[PRE-DICT] Applied, ${ctx.text_regions.size} regions remain")
 
             // Fix unmatched/mismatched brackets (matches Python _run_textline_merge L806-888)
             try {
-                val before = ctx.textRegions.size
-                ctx.textRegions = fixBrackets(ctx.textRegions).toMutableList()
-                AppLogger.i(TAG, "[BRACKETS] After bracket fix: $before → ${ctx.textRegions.size} regions")
-                ctx.textRegions.take(5).forEachIndexed { i, r ->
+                val before = ctx.text_regions.size
+                ctx.text_regions = fixBrackets(ctx.text_regions).toMutableList()
+                AppLogger.i(TAG, "[BRACKETS] After bracket fix: $before → ${ctx.text_regions.size} regions")
+                ctx.text_regions.take(5).forEachIndexed { i, r ->
                     AppLogger.i(TAG, "[BRACKETS]   [$i] '${r.text}'")
                 }
             } catch (e: Exception) {
@@ -267,96 +271,98 @@ class TranslationPipeline(
             // Step 6: Translation
             _progress.value = TranslationProgress.Processing("Translating...", 0.5f)
             // Detect source language from merged text
-            val allText = ctx.textRegions.joinToString("") { it.text }
-            ctx.fromLanguage = detectSourceLanguage(allText).first
+            val allText = ctx.text_regions.joinToString("") { it.text }
+            ctx.from_language = detectSourceLanguage(allText).first
             try {
-                ctx.textRegions = translateWithValidationRetry(ctx.textRegions, config, ctx.fromLanguage)
+                ctx.text_regions = translateWithValidationRetry(ctx.text_regions, config, ctx.from_language)
                 trackModelUsage("translation", config.translator.translator.name)
             } catch (e: Exception) {
                 Log.e(TAG, "Error during translation: ${e.message}", e)
                 if (!config.ignoreErrors) throw e
-                ctx.textRegions = mutableListOf()
+                ctx.text_regions = mutableListOf()
             }
 
             // Step 7: Mask refinement
             _progress.value = TranslationProgress.Processing("Refining mask...", 0.6f)
             try {
                 // Filter text regions through BubbleDetector — remove non-bubble regions from mask
-                val maskRegions = ctx.textRegions.filter { region ->
+                val maskRegions = ctx.text_regions.filter { region ->
                     !BubbleDetector.isIgnore(region, processingBitmap)
                 }
-                val filteredCount = ctx.textRegions.size - maskRegions.size
+                val filteredCount = ctx.text_regions.size - maskRegions.size
                 if (filteredCount > 0) {
                     Log.i(TAG, "BubbleDetector filtered $filteredCount non-bubble regions from mask refinement")
                 }
-                ctx.refinedMask = maskRefiner.refine(
-                    maskRegions, processingBitmap, ctx.rawMask,
+                ctx.refined_mask = maskRefiner.refine(
+                    maskRegions, processingBitmap, ctx.raw_mask,
                     config.kernelSize, config.maskDilationOffset,
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Error during mask refinement: ${e.message}", e)
                 if (!config.ignoreErrors) throw e
-                ctx.refinedMask = ctx.rawMask ?: Bitmap.createBitmap(processingBitmap.width, processingBitmap.height, Bitmap.Config.ARGB_8888).apply { eraseColor(0) }
+                ctx.refined_mask = ctx.raw_mask ?: Bitmap.createBitmap(processingBitmap.width, processingBitmap.height, Bitmap.Config.ARGB_8888).apply { eraseColor(0) }
             }
 
             // Debug: mask_final.png and inpaint_input.png after mask refinement
             if (config.verbose) {
-                ctx.refinedMask?.let { ctx.debugImages["mask_final.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
-                if (ctx.imgRgb != null && ctx.refinedMask != null) {
-                    ctx.debugImages["inpaint_input.png"] = createMaskOverlay(ctx.imgRgb!!, ctx.refinedMask!!)
+                ctx.refined_mask?.let { ctx.debug_images["mask_final.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
+                if (ctx.img_rgb != null && ctx.refined_mask != null) {
+                    ctx.debug_images["inpaint_input.png"] = createMaskOverlay(ctx.img_rgb!!, ctx.refined_mask!!)
                 }
             }
 
             // Step 8: Inpainting
             _progress.value = TranslationProgress.Processing("Inpainting...", 0.7f)
             try {
-                ctx.imgInpainted = inpainter.inpaint(processingBitmap, ctx.refinedMask!!, config.inpainter)
-                ctx.gimpMask = ctx.imgInpainted
+                ctx.img_inpainted = inpainter.inpaint(processingBitmap, ctx.refined_mask!!, config.inpainter)
+                ctx.gimp_mask = ctx.img_inpainted
                 trackModelUsage("inpainting", config.inpainter.inpainter.name)
             } catch (e: Exception) {
                 Log.e(TAG, "Error during inpainting: ${e.message}", e)
                 if (!config.ignoreErrors) throw e
-                ctx.imgInpainted = processingBitmap
-                ctx.gimpMask = processingBitmap
+                ctx.img_inpainted = processingBitmap
+                ctx.gimp_mask = processingBitmap
             }
 
             // Debug: inpainted.png after inpainting
             if (config.verbose) {
-                ctx.imgInpainted?.let { ctx.debugImages["inpainted.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
+                ctx.img_inpainted?.let { ctx.debug_images["inpainted.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
             }
 
             // Step 9: Rendering
             _progress.value = TranslationProgress.Processing("Rendering text...", 0.85f)
-            AppLogger.i(TAG, "[RENDER-PRE] Passing ${ctx.textRegions.size} regions to renderer:")
-            ctx.textRegions.forEachIndexed { i, r ->
+            AppLogger.i(TAG, "[RENDER-PRE] Passing ${ctx.text_regions.size} regions to renderer:")
+            ctx.text_regions.forEachIndexed { i, r ->
                 val rect = r.minRect
                 AppLogger.i(TAG, "[RENDER-PRE]   [$i] '${r.translation.take(15)}' at (${rect.left.toInt()},${rect.top.toInt()})-(${rect.right.toInt()},${rect.bottom.toInt()}) sz=${"%.0f".format(rect.width())}x${"%.0f".format(rect.height())} fontSize=${"%.0f".format(r.fontSize)} lines=${r.lines.size}")
             }
             try {
-                val safeInpainted = ctx.imgInpainted?.copy(Bitmap.Config.ARGB_8888, false) ?: ctx.imgInpainted
-                ctx.imgRendered = renderer.render(safeInpainted!!, ctx.textRegions, config.renderer)
+                val safeInpainted = ctx.img_inpainted?.copy(Bitmap.Config.ARGB_8888, false) ?: ctx.img_inpainted
+                ctx.img_rendered = renderer.render(safeInpainted!!, ctx.text_regions, config.renderer)
             } catch (e: Exception) {
                 Log.e(TAG, "Error during rendering: ${e.message}", e)
                 if (!config.ignoreErrors) throw e
-                ctx.imgRendered = ctx.imgInpainted
+                ctx.img_rendered = ctx.img_inpainted
             }
 
             // Debug: final.png after rendering
             if (config.verbose) {
-                ctx.imgRendered?.let { ctx.debugImages["final.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
+                ctx.img_rendered?.let { ctx.debug_images["final.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
             }
 
+            val rendered = ctx.img_rendered ?: processingBitmap
+            var result = dump_image(ctx.input_bitmap, rendered, ctx.img_alpha)
+
             if (config.upscale.revertUpscaling && processingBitmap !== inputBitmap) {
-                ctx.imgRendered = resizeBitmap(ctx.imgRendered!!, inputBitmap.width, inputBitmap.height)
+                result = image_resize(result, inputBitmap.width, inputBitmap.height)
             }
 
             // Step 10: Finalize
-            val result = ctx.imgRendered ?: processingBitmap
-            ctx.resultBitmap = result
+            ctx.result_bitmap = result
             _progress.value = TranslationProgress.Done(result)
 
-            rememberPageTranslation(ctx.textRegions)
-            TranslationResult.Success(result, ctx.textRegions)
+            rememberPageTranslation(ctx.text_regions)
+            TranslationResult.Success(result, ctx.text_regions)
 
         } catch (e: CancellationException) {
             TranslationResult.Cancelled
@@ -410,14 +416,14 @@ class TranslationPipeline(
                 for ((i, bitmap) in images.withIndex()) {
                     Log.i(TAG, "Batch processing image ${i + 1}/${images.size}")
                     val ctx = translateUntilTranslation(bitmap, config)
-                    if (ctx.textRegions.isEmpty()) {
+                    if (ctx.text_regions.isEmpty()) {
                         results.add(TranslationResult.NoText(bitmap))
                         continue
                     }
-                    ctx.textRegions = translateWithValidationRetry(ctx.textRegions, config, ctx.fromLanguage)
-                    completeTranslationPipeline(ctx, processingBitmap = ctx.imgRgb ?: bitmap, inputBitmap = bitmap, config)
-                    rememberPageTranslation(ctx.textRegions)
-                    results.add(TranslationResult.Success(ctx.resultBitmap ?: bitmap, ctx.textRegions))
+                    ctx.text_regions = translateWithValidationRetry(ctx.text_regions, config, ctx.from_language)
+                    completeTranslationPipeline(ctx, processingBitmap = ctx.img_rgb ?: bitmap, inputBitmap = bitmap, config)
+                    rememberPageTranslation(ctx.text_regions)
+                    results.add(TranslationResult.Success(ctx.result_bitmap ?: bitmap, ctx.text_regions))
                 }
             } else {
                 // Batch mode: pre-process all, then translate together
@@ -435,14 +441,14 @@ class TranslationPipeline(
                 // Complete pipeline per page
                 for ((i, ctx) in translatedContexts.withIndex()) {
                     val bitmap = preContexts[i].second
-                    if (ctx.textRegions.isEmpty()) {
+                    if (ctx.text_regions.isEmpty()) {
                         results.add(TranslationResult.NoText(bitmap))
                         continue
                     }
-                    val processingBitmap = ctx.imgRgb ?: bitmap
+                    val processingBitmap = ctx.img_rgb ?: bitmap
                     completeTranslationPipeline(ctx, processingBitmap, bitmap, config)
-                    rememberPageTranslation(ctx.textRegions)
-                    results.add(TranslationResult.Success(ctx.resultBitmap ?: bitmap, ctx.textRegions))
+                    rememberPageTranslation(ctx.text_regions)
+                    results.add(TranslationResult.Success(ctx.result_bitmap ?: bitmap, ctx.text_regions))
                 }
             }
 
@@ -481,7 +487,7 @@ class TranslationPipeline(
             val textMapping = mutableListOf<Pair<Int, Int>>()  // (contextIndex, regionIndex)
 
             for ((ctxIdx, ctx) in batch.withIndex()) {
-                for ((regionIdx, region) in ctx.textRegions.withIndex()) {
+                for ((regionIdx, region) in ctx.text_regions.withIndex()) {
                     allTexts.add(region.text)
                     textMapping.add(ctxIdx to regionIdx)
                 }
@@ -493,9 +499,9 @@ class TranslationPipeline(
                 // Distribute translations back
                 var textIdx = 0
                 for ((ctxIdx, ctx) in batch.withIndex()) {
-                    for ((regionIdx, region) in ctx.textRegions.withIndex()) {
+                    for ((regionIdx, region) in ctx.text_regions.withIndex()) {
                         if (textIdx < translations.size) {
-                            ctx.textRegions[regionIdx] = region.copy(translation = translations[textIdx])
+                            ctx.text_regions[regionIdx] = region.copy(translation = translations[textIdx])
                             textIdx++
                         }
                     }
@@ -520,14 +526,14 @@ class TranslationPipeline(
     ): List<TranslationContext> = coroutineScope {
         contexts.map { ctx ->
             async {
-                val texts = ctx.textRegions.map { it.text }
+                val texts = ctx.text_regions.map { it.text }
                 if (texts.isEmpty()) return@async ctx
 
                 val translations = batchTranslateTexts(texts, config)
 
-                for ((i, region) in ctx.textRegions.withIndex()) {
+                for ((i, region) in ctx.text_regions.withIndex()) {
                     if (i < translations.size) {
-                        ctx.textRegions[i] = region.copy(translation = translations[i])
+                        ctx.text_regions[i] = region.copy(translation = translations[i])
                     }
                 }
 
@@ -540,39 +546,39 @@ class TranslationPipeline(
         inputBitmap: Bitmap,
         config: TranslationConfig,
     ): TranslationContext {
-        val ctx = TranslationContext(inputBitmap = inputBitmap, config = config)
+        val ctx = TranslationContext(input_bitmap = inputBitmap, config = config)
         // Step 1: Optional preprocessing
         var processingBitmap = inputBitmap
         if (config.colorizer.colorizer != ColorizerType.NONE) {
             processingBitmap = colorizer.colorize(processingBitmap, config.colorizer)
         }
-        ctx.imgColorized = processingBitmap
+        ctx.img_colorized = processingBitmap
 
         if (config.upscale.upscaleRatio != null && config.upscale.upscaleRatio > 1) {
             processingBitmap = upscaler.upscale(processingBitmap, config.upscale)
         }
-        ctx.imgUpscaled = processingBitmap
+        ctx.img_upscaled = processingBitmap
 
         // Step 2: Downsample large images to prevent OOM
         if (maxOf(processingBitmap.width, processingBitmap.height) > config.detector.detectionSize) {
-            processingBitmap = downsampleToMaxSize(processingBitmap, config.detector.detectionSize)
+            processingBitmap = downsample_to_max_size(processingBitmap, config.detector.detectionSize)
         }
-        ctx.originalBitmap = if (processingBitmap !== inputBitmap) inputBitmap else null
-        ctx.imgRgb = processingBitmap
+        ctx.original_bitmap = if (processingBitmap !== inputBitmap) inputBitmap else null
+        ctx.img_rgb = processingBitmap
 
         // Debug: input.png after preprocessing
         if (config.verbose) {
-            ctx.debugImages["input.png"] = processingBitmap.copy(Bitmap.Config.ARGB_8888, false)
+            ctx.debug_images["input.png"] = processingBitmap.copy(Bitmap.Config.ARGB_8888, false)
         }
 
         // Step 3: Detection
         val detectionResult = detector.detect(processingBitmap, config.detector)
         ctx.textlines = detectionResult.textlines.toMutableList()
-        ctx.rawMask = detectionResult.rawMask
+        ctx.raw_mask = detectionResult.rawMask
         // Debug: mask_raw.png and bboxes_unfiltered.png after detection
         if (config.verbose) {
-            ctx.rawMask?.let { ctx.debugImages["mask_raw.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
-            ctx.imgRgb?.let { ctx.debugImages["bboxes_unfiltered.png"] = drawQuadrilaterals(it, ctx.textlines) }
+            ctx.raw_mask?.let { ctx.debug_images["mask_raw.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
+            ctx.img_rgb?.let { ctx.debug_images["bboxes_unfiltered.png"] = drawQuadrilaterals(it, ctx.textlines) }
         }
         if (ctx.textlines.isEmpty()) {
             Log.i(TAG, "NoText after detection: detector=${detector.name}, image=${processingBitmap.width}x${processingBitmap.height}")
@@ -588,18 +594,18 @@ class TranslationPipeline(
         Log.i(TAG, "OCR result: total=${ctx.textlines.size}, nonBlank=$recognizedCount, engine=${config.ocr.ocrEngine}")
         if (ctx.textlines.all { it.text.isBlank() }) {
             Log.i(TAG, "NoText after OCR: engine=${config.ocr.ocrEngine}")
-            return ctx  // caller checks ctx.textRegions.isEmpty()
+            return ctx  // caller checks ctx.text_regions.isEmpty()
         }
 
         // Step 5: Textline merge
-        ctx.textRegions = merger.merge(ctx.textlines, processingBitmap.width, processingBitmap.height).toMutableList()
-        if (ctx.textRegions.isEmpty()) {
+        ctx.text_regions = merger.merge(ctx.textlines, processingBitmap.width, processingBitmap.height).toMutableList()
+        if (ctx.text_regions.isEmpty()) {
             Log.i(TAG, "NoText after merge: lines=${ctx.textlines.size}")
             return ctx
         }
 
-        ctx.textRegions = RegionSorter.sortRegions(
-            ctx.textRegions,
+        ctx.text_regions = RegionSorter.sortRegions(
+            ctx.text_regions,
             rightToLeft = config.renderer.rtl,
             image = processingBitmap,
             forceSimpleSort = config.forceSimpleSort,
@@ -607,28 +613,28 @@ class TranslationPipeline(
 
         // Debug: bboxes.png after textline merge and sorting (visualize_textblocks)
         if (config.verbose) {
-            ctx.debugImages["bboxes.png"] = VisualizeUtils.visualizeTextBlocks(
-                ctx.imgRgb!!, ctx.textRegions,
+            ctx.debug_images["bboxes.png"] = VisualizeUtils.visualizeTextBlocks(
+                ctx.img_rgb!!, ctx.text_regions,
                 showPanels = !config.forceSimpleSort,
                 rightToLeft = config.renderer.rtl,
             )
         }
 
         // Apply pre-dictionary
-        ctx.textRegions = applyPreDictionary(ctx.textRegions, config).toMutableList()
+        ctx.text_regions = applyPreDictionary(ctx.text_regions, config).toMutableList()
 
         // Fix unmatched/mismatched brackets
-        ctx.textRegions = fixBrackets(ctx.textRegions).toMutableList()
-        AppLogger.i(TAG, "[BATCH-BRACKETS] After bracket fix: ${ctx.textRegions.size} regions")
-        ctx.textRegions.take(3).forEachIndexed { i, r ->
+        ctx.text_regions = fixBrackets(ctx.text_regions).toMutableList()
+        AppLogger.i(TAG, "[BATCH-BRACKETS] After bracket fix: ${ctx.text_regions.size} regions")
+        ctx.text_regions.take(3).forEachIndexed { i, r ->
             AppLogger.i(TAG, "[BATCH-BRACKETS]   [$i] '${r.text}'")
         }
 
         // Detect source language from merged text
-        val allText = ctx.textRegions.joinToString("") { it.text }
-        ctx.fromLanguage = detectSourceLanguage(allText).first
+        val allText = ctx.text_regions.joinToString("") { it.text }
+        ctx.from_language = detectSourceLanguage(allText).first
 
-        return ctx  // contains textRegions ready for translation
+        return ctx  // contains text_regions ready for translation
     }
 
     /**
@@ -1007,54 +1013,54 @@ class TranslationPipeline(
     ): TranslationContext {
         // Step 7: Mask refinement
         // Filter text regions through BubbleDetector — remove non-bubble regions from mask
-        val maskRegions = ctx.textRegions.filter { region ->
+        val maskRegions = ctx.text_regions.filter { region ->
             !BubbleDetector.isIgnore(region, processingBitmap)
         }
-        val filteredCount = ctx.textRegions.size - maskRegions.size
+        val filteredCount = ctx.text_regions.size - maskRegions.size
         if (filteredCount > 0) {
             Log.i(TAG, "BubbleDetector filtered $filteredCount non-bubble regions from mask refinement")
         }
-        ctx.refinedMask = maskRefiner.refine(
-            maskRegions, processingBitmap, ctx.rawMask,
+        ctx.refined_mask = maskRefiner.refine(
+            maskRegions, processingBitmap, ctx.raw_mask,
             config.kernelSize, config.maskDilationOffset,
         )
 
         // Debug: mask_final.png and inpaint_input.png after mask refinement
         if (config.verbose) {
-            ctx.refinedMask?.let { ctx.debugImages["mask_final.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
-            ctx.imgRgb?.let { img ->
-                ctx.refinedMask?.let { mask ->
-                    ctx.debugImages["inpaint_input.png"] = createMaskOverlay(img, mask)
+            ctx.refined_mask?.let { ctx.debug_images["mask_final.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
+            ctx.img_rgb?.let { img ->
+                ctx.refined_mask?.let { mask ->
+                    ctx.debug_images["inpaint_input.png"] = createMaskOverlay(img, mask)
                 }
             }
         }
 
         // Step 8: Inpainting
-        ctx.imgInpainted = inpainter.inpaint(processingBitmap, ctx.refinedMask!!, config.inpainter)
-        ctx.gimpMask = ctx.imgInpainted
+        ctx.img_inpainted = inpainter.inpaint(processingBitmap, ctx.refined_mask!!, config.inpainter)
+        ctx.gimp_mask = ctx.img_inpainted
 
         // Debug: inpainted.png after inpainting
         if (config.verbose) {
-            ctx.imgInpainted?.let { ctx.debugImages["inpainted.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
+            ctx.img_inpainted?.let { ctx.debug_images["inpainted.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
         }
 
         // Step 9: Rendering
-        val safeInpainted = ctx.imgInpainted?.copy(Bitmap.Config.ARGB_8888, false) ?: ctx.imgInpainted
-        ctx.imgRendered = renderer.render(safeInpainted!!, ctx.textRegions, config.renderer)
+        val safeInpainted = ctx.img_inpainted?.copy(Bitmap.Config.ARGB_8888, false) ?: ctx.img_inpainted
+        ctx.img_rendered = renderer.render(safeInpainted!!, ctx.text_regions, config.renderer)
 
         // Debug: final.png after rendering
         if (config.verbose) {
-            ctx.imgRendered?.let { ctx.debugImages["final.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
+            ctx.img_rendered?.let { ctx.debug_images["final.png"] = it.copy(Bitmap.Config.ARGB_8888, false) }
         }
 
         // Revert upscale if needed
         if (config.upscale.revertUpscaling && processingBitmap !== inputBitmap) {
-            ctx.imgRendered = resizeBitmap(ctx.imgRendered!!, inputBitmap.width, inputBitmap.height)
+            ctx.img_rendered = image_resize(ctx.img_rendered!!, inputBitmap.width, inputBitmap.height)
         }
 
         // Step 10: Finalize
-        val result = ctx.imgRendered ?: processingBitmap
-        ctx.resultBitmap = result
+        val result = ctx.img_rendered ?: processingBitmap
+        ctx.result_bitmap = result
 
         return ctx
     }

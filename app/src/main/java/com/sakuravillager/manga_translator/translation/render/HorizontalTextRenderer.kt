@@ -5,6 +5,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.PointF
 import android.graphics.PorterDuff
@@ -119,7 +120,23 @@ class HorizontalTextRenderer(
 
             when (region.direction) {
                 TextDirection.VERTICAL -> {
-                    renderVerticalText(canvas, renderText, rect, paint, fgColor, bgColor, config.disableFontBorder, region.strokeWidth)
+                    AppLogger.i(
+                        name,
+                        "[V-PRE] regionFontSize=${region.fontSize} paintSize=${paint.textSize} " +
+                            "offset=${config.fontSizeOffset} min=${config.fontSizeMinimum} " +
+                            "lineSpacing=${region.lineSpacing} text='${renderText.take(10)}' rect=${rect.width().toInt()}x${rect.height().toInt()}",
+                    )
+                    renderVerticalText(
+                        canvas,
+                        renderText,
+                        rect,
+                        paint,
+                        fgColor,
+                        bgColor,
+                        config.disableFontBorder,
+                        region.strokeWidth,
+                        effectiveLineSpacing,
+                    )
                     continue
                 }
                 TextDirection.HORIZONTAL_RTL -> {
@@ -213,45 +230,114 @@ class HorizontalTextRenderer(
         bgColor: Int,
         disableBorder: Boolean,
         strokeWidth: Float,
+        lineSpacing: Float?,
     ) {
-        // Scale font to fit text within rect bounds (single vertical column).
-        // Python uses perspective transform to squash wide canvas into narrow quad;
-        // Canvas renders directly, so we must constrain to 1 column that fits.
-        val maxByWidth = rect.width() / 1.1f
-        val maxByHeight = rect.height() / (text.length.coerceAtLeast(1) * 1.2f)
-        var fontSize = minOf(paint.textSize, maxByWidth, maxByHeight).coerceAtLeast(4f)
+        // Scale font to fit the available box, then place glyphs using measured bounds.
+        // This is closer to the Python renderer than anchoring by font size alone.
+        val renderText = text.trim()
+        if (renderText.isEmpty()) return
+
+        val availableWidth = (rect.width() - strokeWidth * 2f).coerceAtLeast(1f)
+        val availableHeight = (rect.height() - strokeWidth * 2f).coerceAtLeast(1f)
+        val bounds = Rect()
+
+        val heightDrivenFontSize = (availableHeight / maxOf(renderText.length, 1).toFloat() * 0.92f).coerceAtLeast(4f)
+        val widthDrivenFontSize = (availableWidth / 1.15f).coerceAtLeast(4f)
+        val initialFontSize = if (paint.textSize > heightDrivenFontSize) paint.textSize else heightDrivenFontSize
+        val boundedFontSize = if (initialFontSize > widthDrivenFontSize) widthDrivenFontSize else initialFontSize
+        var fontSize = boundedFontSize
         paint.textSize = fontSize
-        var maxCharsPerColumn = text.length.coerceAtLeast(1)
-        var numColumns = 1
-        AppLogger.i(name, "[V-RENDER] text='${text.take(10)}' fontSize=$fontSize rect=${rect.width().toInt()}x${rect.height().toInt()} maxW=${"%.1f".format(maxByWidth)} maxH=${"%.1f".format(maxByHeight)}")
+        var fontMetrics = paint.fontMetrics
+        var fontMetricsHeight = (fontMetrics.bottom - fontMetrics.top).coerceAtLeast(1f)
+        var maxCharHeight = 0f
+        var maxCharWidth = 0f
+        for (char in renderText) {
+            val charString = char.toString()
+            paint.getTextBounds(charString, 0, 1, bounds)
+            maxCharHeight = maxOf(maxCharHeight, bounds.height().toFloat().coerceAtLeast(1f))
+            maxCharWidth = maxOf(maxCharWidth, bounds.width().toFloat().coerceAtLeast(paint.measureText(charString)))
+        }
+        var lineHeight = maxOf(fontSize * 1.03f, maxCharHeight * 1.02f).coerceAtLeast(1f)
+        var charsPerColumn = maxOf(1, kotlin.math.floor(availableHeight / fontSize).toInt())
+        var columnCount = kotlin.math.ceil(renderText.length / charsPerColumn.toFloat()).toInt().coerceAtLeast(1)
 
-        // Draw characters top-to-bottom, columns right-to-left
-        var colX = rect.right - fontSize
+        var columnWidth = maxOf(fontSize * 0.95f, maxCharWidth + strokeWidth * 1.1f).coerceAtLeast(4f)
+        val columnGap = maxOf(fontSize * (lineSpacing?.takeIf { it > 0f } ?: 0.2f), strokeWidth * 0.5f)
+            .coerceAtLeast(0f)
+        var columnAdvance = columnWidth + columnGap
+        var totalWidth = columnAdvance * columnCount
+
+        if (totalWidth > availableWidth) {
+            val scale = availableWidth / totalWidth
+            fontSize = maxOf(fontSize * scale, 4f)
+            paint.textSize = fontSize
+            fontMetrics = paint.fontMetrics
+            fontMetricsHeight = (fontMetrics.bottom - fontMetrics.top).coerceAtLeast(1f)
+
+            maxCharHeight = 0f
+            maxCharWidth = 0f
+            for (char in renderText) {
+                val charString = char.toString()
+                paint.getTextBounds(charString, 0, 1, bounds)
+                maxCharHeight = maxOf(maxCharHeight, bounds.height().toFloat().coerceAtLeast(1f))
+                maxCharWidth = maxOf(maxCharWidth, bounds.width().toFloat().coerceAtLeast(paint.measureText(charString)))
+            }
+
+            lineHeight = maxOf(fontSize * 1.03f, maxCharHeight * 1.02f).coerceAtLeast(1f)
+            charsPerColumn = maxOf(1, kotlin.math.floor(availableHeight / fontSize).toInt())
+            columnCount = kotlin.math.ceil(renderText.length / charsPerColumn.toFloat()).toInt().coerceAtLeast(1)
+
+            columnWidth = maxOf(fontSize * 0.95f, maxCharWidth + strokeWidth * 1.1f).coerceAtLeast(4f)
+            columnAdvance = columnWidth + columnGap
+            totalWidth = columnAdvance * columnCount
+        }
+
+        AppLogger.i(
+            name,
+            "[V-RENDER] text='${renderText.take(10)}' fontSize=$fontSize rect=${rect.width().toInt()}x${rect.height().toInt()} " +
+                "charsPerColumn=$charsPerColumn columns=$columnCount colW=${"%.1f".format(columnWidth)} " +
+                "lineH=${"%.1f".format(lineHeight)} maxCharH=${"%.1f".format(maxCharHeight)} fmH=${"%.1f".format(fontMetricsHeight)} " +
+                "colGap=${"%.1f".format(columnGap)} " +
+                "avail=${"%.1f".format(availableWidth)}x${"%.1f".format(availableHeight)} totalW=${"%.1f".format(totalWidth)} " +
+                "heightDriven=${"%.1f".format(heightDrivenFontSize)} widthDriven=${"%.1f".format(widthDrivenFontSize)} " +
+                "initial=${"%.1f".format(initialFontSize)} bounded=${"%.1f".format(boundedFontSize)} " +
+                "paintSize=${"%.1f".format(paint.textSize)}",
+        )
+
+        val startRight = rect.right - strokeWidth
+        var columnRight = startRight
         var charIndex = 0
-        while (charIndex < text.length) {
-            var charY = rect.top + fontSize
-            val columnEnd = minOf(charIndex + maxCharsPerColumn, text.length)
-            while (charIndex < columnEnd) {
-                val char = text[charIndex].toString()
-                val fm = paint.fontMetrics
-                val charHeight = (-fm.top + fm.bottom) * 1.2f
+        while (charIndex < renderText.length) {
+            val columnEnd = minOf(charIndex + charsPerColumn, renderText.length)
+            val columnText = renderText.substring(charIndex, columnEnd)
+            val columnHeight = lineHeight * columnText.length
+            var currentTop = rect.top + ((availableHeight - columnHeight).coerceAtLeast(0f) / 2f)
+            val columnLeft = columnRight - columnWidth
 
-                // Border pass (stroke)
+            for (char in columnText) {
+                val charString = char.toString()
+                paint.getTextBounds(charString, 0, 1, bounds)
+
+                val charWidth = maxOf(bounds.width().toFloat(), paint.measureText(charString))
+                val charX = columnLeft + (columnWidth - charWidth) / 2f - bounds.left
+                val charY = currentTop - bounds.top
+
                 if (!disableBorder) {
                     paint.style = Paint.Style.STROKE
                     paint.strokeWidth = strokeWidth
                     paint.color = bgColor
-                    canvas.drawText(char, colX, charY, paint)
+                    canvas.drawText(charString, charX, charY, paint)
                 }
-                // Fill pass (foreground)
+
                 paint.style = Paint.Style.FILL
                 paint.color = fgColor
-                canvas.drawText(char, colX, charY, paint)
+                canvas.drawText(charString, charX, charY, paint)
 
-                charY += charHeight
-                charIndex++
+                currentTop += lineHeight
             }
-            colX -= fontSize * 1.1f // Move to next column (leftwards)
+
+            charIndex = columnEnd
+            columnRight -= columnAdvance
         }
     }
 

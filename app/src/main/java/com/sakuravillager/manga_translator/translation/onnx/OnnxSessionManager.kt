@@ -4,6 +4,7 @@ import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.File
 
 object OnnxSessionManager {
 
@@ -19,6 +20,16 @@ object OnnxSessionManager {
     ): OrtSession = withContext(Dispatchers.Default) {
         val opts = options ?: createDefaultSessionOptions()
         val session = environment.createSession(modelBytes, opts)
+        addSession(session)
+        session
+    }
+
+    suspend fun createSession(
+        modelFile: File,
+        options: OrtSession.SessionOptions? = null,
+    ): OrtSession = withContext(Dispatchers.Default) {
+        val opts = options ?: createDefaultSessionOptions()
+        val session = environment.createSession(modelFile.absolutePath, opts)
         addSession(session)
         session
     }

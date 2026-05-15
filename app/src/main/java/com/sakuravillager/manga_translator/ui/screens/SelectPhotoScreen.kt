@@ -1,5 +1,6 @@
 package com.sakuravillager.manga_translator.ui.screens
 
+import android.content.Context
 import android.os.Build
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -63,6 +64,23 @@ import com.sakuravillager.manga_translator.ui.components.TopAppBarWithBack
 import com.sakuravillager.manga_translator.ui.components.TranslationOptionsCard
 import com.sakuravillager.manga_translator.ui.theme.SuccessGreen
 import com.sakuravillager.manga_translator.ui.viewmodel.SelectPhotoViewModel
+import java.io.File
+import java.util.UUID
+
+private fun copyImageToCache(context: Context, sourceUri: Uri): Uri {
+    val cacheDir = File(context.cacheDir, "selected_images")
+    if (!cacheDir.exists()) {
+        cacheDir.mkdirs()
+    }
+
+    val targetFile = File(cacheDir, "img_${UUID.randomUUID()}.png")
+    context.contentResolver.openInputStream(sourceUri)?.use { inputStream ->
+        targetFile.outputStream().use { outputStream ->
+            inputStream.copyTo(outputStream)
+        }
+    } ?: throw IllegalStateException("Unable to open input stream for $sourceUri")
+    return Uri.fromFile(targetFile)
+}
 
 @Composable
 fun SelectPhotoScreen(
@@ -72,6 +90,7 @@ fun SelectPhotoScreen(
 ) {
     val selectedImages by viewModel.selectedImages.collectAsState()
     val translationOptions by viewModel.translationOptions.collectAsState()
+    val context = androidx.compose.ui.platform.LocalContext.current
 
     var showTranslatorDialog by remember { mutableStateOf(false) }
     var showTextDirectionDialog by remember { mutableStateOf(false) }
@@ -84,7 +103,10 @@ fun SelectPhotoScreen(
     ) { uris ->
         try {
             AppLogger.i("SelectPhoto", "Selected ${uris.size} images")
-            uris.forEach { uri -> viewModel.addImage(uri) }
+            uris.forEach { uri ->
+                val cachedUri = copyImageToCache(context, uri)
+                viewModel.addImage(cachedUri)
+            }
         } catch (e: Exception) {
             AppLogger.e("SelectPhoto", "Photo selection failed", e)
         }
@@ -96,7 +118,10 @@ fun SelectPhotoScreen(
     ) { uris ->
         try {
             AppLogger.i("SelectPhoto", "Selected ${uris.size} images")
-            uris.forEach { uri -> viewModel.addImage(uri) }
+            uris.forEach { uri ->
+                val cachedUri = copyImageToCache(context, uri)
+                viewModel.addImage(cachedUri)
+            }
         } catch (e: Exception) {
             AppLogger.e("SelectPhoto", "Photo selection failed", e)
         }

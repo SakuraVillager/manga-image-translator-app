@@ -78,16 +78,24 @@ class Model48pxTextRecognizer(
 
     override suspend fun prepare() {
         AppLogger.i(TAG, "[OCR-IMPL] Loading model from assets/models/ocr_ctc_48px.onnx ...")
-        val modelBytes = context.assets.open("models/ocr_ctc_48px.onnx").use { it.readBytes() }
-        AppLogger.i(TAG, "[OCR-IMPL] Model bytes read: ${modelBytes.size} bytes (${modelBytes.size / 1024} KB)")
-        session = env.createSession(modelBytes, OrtSession.SessionOptions())
+        val modelFile = File(context.filesDir, "models/ocr_ctc_48px.onnx")
+        if (!modelFile.exists()) {
+            modelFile.parentFile?.mkdirs()
+            context.assets.open("models/ocr_ctc_48px.onnx").use { input ->
+                modelFile.outputStream().use { output ->
+                    input.copyTo(output)
+                }
+            }
+        }
+        AppLogger.i(TAG, "[OCR-IMPL] Model file ready: ${modelFile.absolutePath} (${modelFile.length() / 1024} KB)")
+        session = env.createSession(modelFile.absolutePath, OrtSession.SessionOptions())
         OcrDictionary.load(context)
         _isReady = true
         AppLogger.i(TAG, "[OCR-IMPL] Model loaded, dictionary size=${OcrDictionary.size}, BLANK=${OcrDictionary.BLANK}")
 
         // Log model I/O specs for parity debugging
         val sess = session!!
-        AppLogger.i(TAG, "CTC OCR model loaded (${modelBytes.size / 1024} KB)")
+        AppLogger.i(TAG, "CTC OCR model loaded (${modelFile.length() / 1024} KB)")
         AppLogger.i(TAG, "Model input names: ${sess.inputNames}")
         AppLogger.i(TAG, "Model output names: ${sess.outputNames}")
         for (name in sess.inputNames) {
