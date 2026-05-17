@@ -29,13 +29,15 @@ import com.sakuravillager.manga_translator.translation.ocr.ModelMangaOCR
 // Note: avoid eager reference to OnnxSessionManager here to prevent native JNI loading
 import com.sakuravillager.manga_translator.translation.pipeline.TranslationPipeline
 import com.sakuravillager.manga_translator.translation.inpaint.AotInpainter
-import com.sakuravillager.manga_translator.translation.inpaint.SimpleFillInpainter
+import com.sakuravillager.manga_translator.translation.inpaint.NoneInpainter
+import com.sakuravillager.manga_translator.translation.inpaint.LamaLargeInpainter
+import com.sakuravillager.manga_translator.translation.inpaint.LamaMPEInpainter
+import com.sakuravillager.manga_translator.translation.inpaint.OriginalInpainter
 import com.sakuravillager.manga_translator.translation.mask.CompleteMaskRefiner
 import com.sakuravillager.manga_translator.translation.mask.OpenCVMaskRefiner
 import com.sakuravillager.manga_translator.translation.render.HorizontalTextRenderer
 import com.sakuravillager.manga_translator.translation.upscale.BasicUpscaler
 import com.sakuravillager.manga_translator.translation.upscale.EsrganUpscaler
-import com.sakuravillager.manga_translator.translation.stub.NoOpInpainter
 import com.sakuravillager.manga_translator.translation.stub.NoOpMaskRefiner
 import com.sakuravillager.manga_translator.translation.stub.NoOpTextDetector
 import com.sakuravillager.manga_translator.translation.stub.NoOpTextRecognizer
@@ -148,10 +150,15 @@ val translationModule = module {
     factory<Inpainter> {
         val config: TranslationConfig = get()
         when (config.inpainter.inpainter) {
-            InpainterType.AOT, InpainterType.LAMA_LARGE, InpainterType.LAMA_MPE ->
+            InpainterType.AOT ->
                 AotInpainter(get(), get(), androidContext())
-            InpainterType.SIMPLE_FILL -> SimpleFillInpainter()
-            else -> SimpleFillInpainter()
+            InpainterType.LAMA_LARGE ->
+                LamaLargeInpainter(get(), get(), androidContext())
+            InpainterType.LAMA_MPE ->
+                LamaMPEInpainter(get(), get(), androidContext())
+            InpainterType.SIMPLE_FILL -> NoneInpainter()
+            InpainterType.NONE -> OriginalInpainter()
+            else -> LamaLargeInpainter(get(), get(), androidContext())
         }
     }
     factory<TextRenderer> { HorizontalTextRenderer(androidContext(), get()) }

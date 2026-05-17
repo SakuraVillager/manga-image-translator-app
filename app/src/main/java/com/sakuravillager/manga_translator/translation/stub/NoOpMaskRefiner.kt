@@ -26,6 +26,7 @@ class NoOpMaskRefiner : MaskRefiner {
         rawMask: Bitmap?,
         kernelSize: Int,
         dilationOffset: Int,
+        ignoreBubble: Int,
     ): Bitmap {
         if (rawMask != null) {
             return rawMask

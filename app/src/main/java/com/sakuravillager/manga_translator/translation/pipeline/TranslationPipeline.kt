@@ -29,7 +29,6 @@ import com.sakuravillager.manga_translator.translation.util.VisualizeUtils
 import com.sakuravillager.manga_translator.translation.sort.RegionSorter
 import com.sakuravillager.manga_translator.translation.util.downsample_to_max_size
 import com.sakuravillager.manga_translator.translation.dict.DictionaryLoader
-import com.sakuravillager.manga_translator.translation.mask.BubbleDetector
 import com.sakuravillager.manga_translator.translation.pipeline.RepetitionHallucinationChecker
 import com.sakuravillager.manga_translator.translation.translator.TranslationValidator
 import kotlinx.coroutines.CancellationException
@@ -285,17 +284,9 @@ class TranslationPipeline(
             // Step 7: Mask refinement
             _progress.value = TranslationProgress.Processing("Refining mask...", 0.6f)
             try {
-                // Filter text regions through BubbleDetector — remove non-bubble regions from mask
-                val maskRegions = ctx.text_regions.filter { region ->
-                    !BubbleDetector.isIgnore(region, processingBitmap)
-                }
-                val filteredCount = ctx.text_regions.size - maskRegions.size
-                if (filteredCount > 0) {
-                    Log.i(TAG, "BubbleDetector filtered $filteredCount non-bubble regions from mask refinement")
-                }
                 ctx.refined_mask = maskRefiner.refine(
-                    maskRegions, processingBitmap, ctx.raw_mask,
-                    config.kernelSize, config.maskDilationOffset,
+                    ctx.text_regions, processingBitmap, ctx.raw_mask,
+                    config.kernelSize, config.maskDilationOffset, config.ocr.ignoreBubble,
                 )
             } catch (e: Exception) {
                 Log.e(TAG, "Error during mask refinement: ${e.message}", e)
@@ -1012,17 +1003,9 @@ class TranslationPipeline(
         config: TranslationConfig,
     ): TranslationContext {
         // Step 7: Mask refinement
-        // Filter text regions through BubbleDetector — remove non-bubble regions from mask
-        val maskRegions = ctx.text_regions.filter { region ->
-            !BubbleDetector.isIgnore(region, processingBitmap)
-        }
-        val filteredCount = ctx.text_regions.size - maskRegions.size
-        if (filteredCount > 0) {
-            Log.i(TAG, "BubbleDetector filtered $filteredCount non-bubble regions from mask refinement")
-        }
         ctx.refined_mask = maskRefiner.refine(
-            maskRegions, processingBitmap, ctx.raw_mask,
-            config.kernelSize, config.maskDilationOffset,
+            ctx.text_regions, processingBitmap, ctx.raw_mask,
+            config.kernelSize, config.maskDilationOffset, config.ocr.ignoreBubble,
         )
 
         // Debug: mask_final.png and inpaint_input.png after mask refinement

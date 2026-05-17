@@ -4,11 +4,11 @@ import android.content.Context
 import com.sakuravillager.manga_translator.translation.model.ModelDownloadManager
 import com.sakuravillager.manga_translator.translation.onnx.OnnxSessionManager
 
-class AotInpainter(
+class LamaLargeInpainter(
     modelDownloadManager: ModelDownloadManager,
     sessionManager: OnnxSessionManager,
     context: Context,
 ) : LamaMPEInpainter(modelDownloadManager, sessionManager, context) {
-    override val name: String = "AotInpainter"
-    override val logTag: String = "AotInpainter"
+    override val name: String = "LamaLargeInpainter"
+    override val logTag: String = "LamaLargeInpainter"
 }

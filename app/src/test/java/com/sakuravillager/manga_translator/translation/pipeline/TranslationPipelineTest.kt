@@ -12,7 +12,7 @@ import com.sakuravillager.manga_translator.translation.api.Upscaler
 import com.sakuravillager.manga_translator.translation.data.config.ColorizerConfig
 import com.sakuravillager.manga_translator.translation.data.config.UpscaleConfig
 import com.sakuravillager.manga_translator.translation.data.config.TranslationConfig
-import com.sakuravillager.manga_translator.translation.stub.NoOpInpainter
+import com.sakuravillager.manga_translator.translation.inpaint.OriginalInpainter
 import com.sakuravillager.manga_translator.translation.stub.NoOpMaskRefiner
 import com.sakuravillager.manga_translator.translation.stub.NoOpTextDetector
 import com.sakuravillager.manga_translator.translation.stub.NoOpTextRecognizer
@@ -59,7 +59,7 @@ class TranslationPipelineTest {
             colorizer = StubColorizer(),
             upscaler = StubUpscaler(),
             maskRefiner = NoOpMaskRefiner(),
-            inpainter = NoOpInpainter(),
+            inpainter = OriginalInpainter(),
             renderer = NoOpTextRenderer(),
             config = TranslationConfig(),
         )
@@ -76,7 +76,7 @@ class TranslationPipelineTest {
             colorizer = StubColorizer(),
             upscaler = StubUpscaler(),
             maskRefiner = NoOpMaskRefiner(),
-            inpainter = NoOpInpainter(),
+            inpainter = OriginalInpainter(),
             renderer = NoOpTextRenderer(),
             config = TranslationConfig(),
         )
@@ -97,7 +97,7 @@ class TranslationPipelineTest {
             colorizer = StubColorizer(),
             upscaler = StubUpscaler(),
             maskRefiner = NoOpMaskRefiner(),
-            inpainter = NoOpInpainter(),
+            inpainter = OriginalInpainter(),
             renderer = NoOpTextRenderer(),
             config = config,
         )

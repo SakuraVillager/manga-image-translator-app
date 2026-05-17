@@ -13,7 +13,7 @@ import com.sakuravillager.manga_translator.translation.data.Quadrilateral
 import com.sakuravillager.manga_translator.translation.data.config.DetectorConfig
 import com.sakuravillager.manga_translator.translation.data.config.OcrConfig
 import com.sakuravillager.manga_translator.translation.data.config.TranslationConfig
-import com.sakuravillager.manga_translator.translation.inpaint.SimpleFillInpainter
+import com.sakuravillager.manga_translator.translation.inpaint.NoneInpainter
 import com.sakuravillager.manga_translator.translation.mask.OpenCVMaskRefiner
 import com.sakuravillager.manga_translator.translation.merge.DefaultTextlineMerger
 import com.sakuravillager.manga_translator.translation.model.ModelDownloadManager
@@ -34,7 +34,7 @@ import org.junit.runner.RunWith
  * End-to-end instrumented test for [TranslationPipeline] using a mix of:
  * - [TextDetector] / [TextRecognizer] inline fakes (avoids ONNX model files)
  * - Real module implementations: [DefaultTextlineMerger], [OpenCVMaskRefiner],
- *   [SimpleFillInpainter], [HorizontalTextRenderer]
+ *   [NoneInpainter], [HorizontalTextRenderer]
  * - [OriginalTranslator] (no network dependency)
  */
 @RunWith(AndroidJUnit4::class)
@@ -123,7 +123,7 @@ class TranslationPipelineE2ETest {
                 override suspend fun upscale(bitmap: Bitmap, config: UpscaleConfig): Bitmap = bitmap
             },
             maskRefiner = OpenCVMaskRefiner(),
-            inpainter = SimpleFillInpainter(),
+            inpainter = NoneInpainter(),
             renderer = HorizontalTextRenderer(context, modelDl),
             config = TranslationConfig(),
         )

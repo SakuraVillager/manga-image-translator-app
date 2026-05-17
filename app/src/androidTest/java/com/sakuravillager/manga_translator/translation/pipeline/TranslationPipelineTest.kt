@@ -12,12 +12,12 @@ import com.sakuravillager.manga_translator.translation.api.MaskRefiner
 import com.sakuravillager.manga_translator.translation.data.DetectionResult
 import com.sakuravillager.manga_translator.translation.data.config.DetectorConfig
 import com.sakuravillager.manga_translator.translation.data.config.TranslationConfig
+import com.sakuravillager.manga_translator.translation.inpaint.OriginalInpainter
 import com.sakuravillager.manga_translator.translation.stub.NoOpTextDetector
 import com.sakuravillager.manga_translator.translation.stub.NoOpTextRecognizer
 import com.sakuravillager.manga_translator.translation.stub.NoOpTextlineMerger
 import com.sakuravillager.manga_translator.translation.translator.NoOpTranslator
 import com.sakuravillager.manga_translator.translation.stub.NoOpMaskRefiner
-import com.sakuravillager.manga_translator.translation.stub.NoOpInpainter
 import com.sakuravillager.manga_translator.translation.stub.NoOpTextRenderer
 import com.sakuravillager.manga_translator.translation.api.Colorizer
 import com.sakuravillager.manga_translator.translation.api.Upscaler
@@ -59,7 +59,7 @@ class TranslationPipelineTest {
             colorizer = noOpColorizer,
             upscaler = noOpUpscaler,
             maskRefiner = NoOpMaskRefiner(),
-            inpainter = NoOpInpainter(),
+            inpainter = OriginalInpainter(),
             renderer = NoOpTextRenderer(),
             config = TranslationConfig(),
         )
@@ -78,7 +78,7 @@ class TranslationPipelineTest {
             colorizer = noOpColorizer,
             upscaler = noOpUpscaler,
             maskRefiner = NoOpMaskRefiner(),
-            inpainter = NoOpInpainter(),
+            inpainter = OriginalInpainter(),
             renderer = NoOpTextRenderer(),
             config = TranslationConfig(),
         )
@@ -101,7 +101,7 @@ class TranslationPipelineTest {
             colorizer = noOpColorizer,
             upscaler = noOpUpscaler,
             maskRefiner = NoOpMaskRefiner(),
-            inpainter = NoOpInpainter(),
+            inpainter = OriginalInpainter(),
             renderer = NoOpTextRenderer(),
             config = TranslationConfig(),
         )

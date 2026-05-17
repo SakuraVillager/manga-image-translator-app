@@ -11,5 +11,6 @@ interface MaskRefiner : PipelineModule {
         rawMask: Bitmap?,
         kernelSize: Int = 3,
         dilationOffset: Int = 20,
+        ignoreBubble: Int = 0,
     ): Bitmap
 }

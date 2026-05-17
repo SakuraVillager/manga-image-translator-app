@@ -15,7 +15,7 @@ import com.sakuravillager.manga_translator.translation.data.config.InpainterType
 import com.sakuravillager.manga_translator.translation.data.config.OcrConfig
 import com.sakuravillager.manga_translator.translation.data.config.OcrEngineType
 import com.sakuravillager.manga_translator.translation.data.config.TranslationConfig
-import com.sakuravillager.manga_translator.translation.inpaint.SimpleFillInpainter
+import com.sakuravillager.manga_translator.translation.inpaint.NoneInpainter
 import com.sakuravillager.manga_translator.translation.mask.CompleteMaskRefiner
 import com.sakuravillager.manga_translator.translation.merge.DefaultTextlineMerger
 import com.sakuravillager.manga_translator.translation.pipeline.TranslationPipeline
@@ -105,9 +105,9 @@ class TranslationModuleTest : KoinTest {
     }
 
     @Test
-    fun `resolve Inpainter returns SimpleFillInpainter`() {
+    fun `resolve Inpainter returns NoneInpainter`() {
         val inpainter = get<Inpainter>()
-        assertTrue(inpainter is SimpleFillInpainter)
+        assertTrue(inpainter is NoneInpainter)
     }
 
     @Test

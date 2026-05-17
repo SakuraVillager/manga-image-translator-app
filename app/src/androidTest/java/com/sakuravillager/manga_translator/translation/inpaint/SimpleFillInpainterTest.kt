@@ -14,14 +14,14 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 @RunWith(AndroidJUnit4::class)
-class SimpleFillInpainterTest {
+class NoneInpainterTest {
 
-    private lateinit var inpainter: SimpleFillInpainter
+    private lateinit var inpainter: NoneInpainter
     private val config = InpainterConfig()
 
     @Before
     fun setUp() {
-        inpainter = SimpleFillInpainter()
+        inpainter = NoneInpainter()
     }
 
     @Test

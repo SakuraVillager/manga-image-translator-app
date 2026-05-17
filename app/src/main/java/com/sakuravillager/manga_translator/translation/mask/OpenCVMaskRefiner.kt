@@ -35,6 +35,7 @@ class OpenCVMaskRefiner : MaskRefiner {
         rawMask: Bitmap?,
         kernelSize: Int,
         dilationOffset: Int,
+        ignoreBubble: Int,
     ): Bitmap {
         // Step 1: create mask bitmap if rawMask is null
         val maskBitmap = rawMask ?: Bitmap.createBitmap(

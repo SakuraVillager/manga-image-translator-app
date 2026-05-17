@@ -72,6 +72,7 @@ class CompleteMaskRefiner : MaskRefiner {
         rawMask: Bitmap?,
         kernelSize: Int,
         dilationOffset: Int,
+        ignoreBubble: Int,
     ): Bitmap {
         // scale_factor matching Python mask_refinement/__init__.py L12:
         //   scale_factor = max(min((mask_H - image_H/3) / mask_H, 1), 0.5)
@@ -280,8 +281,9 @@ class CompleteMaskRefiner : MaskRefiner {
             // --- Step 7: Bilateral filter on source image (CRF alt.) ---
             val imgMat = bitmapToMat(bitmap).also { ownedMats.add(it) }
             val imgGray = Mat().also { ownedMats.add(it) }
+            val imgGrayFiltered = Mat().also { ownedMats.add(it) }
             Imgproc.cvtColor(imgMat, imgGray, Imgproc.COLOR_RGBA2GRAY)
-            Imgproc.bilateralFilter(imgGray, imgGray, 17, 80.0, 80.0)
+            Imgproc.bilateralFilter(imgGray, imgGrayFiltered, 17, 80.0, 80.0)
 
             // --- Step 8-9: Process each text line & build final mask ---
             val finalMask = Mat.zeros(height, width, CvType.CV_8UC1).also { ownedMats.add(it) }
@@ -321,6 +323,33 @@ class CompleteMaskRefiner : MaskRefiner {
                 val ccSub = Mat(ccMask, ccRect)  // submat
                 Imgproc.morphologyEx(ccSub, ccSub, Imgproc.MORPH_CLOSE, closeKernel)
 
+                // --- Python-like local refinement using the filtered image ---
+                val refineKernelSize = maxOf(3, ((dilateSize / 6) * 2) + 1)
+                val refineKernel = Imgproc.getStructuringElement(
+                    Imgproc.MORPH_ELLIPSE,
+                    Size(refineKernelSize.toDouble(), refineKernelSize.toDouble()),
+                ).also { ownedMats.add(it) }
+                val imgSub = Mat(imgGrayFiltered, ccRect)
+                val darkMask = Mat().also { ownedMats.add(it) }
+                val strongDarkMask = Mat().also { ownedMats.add(it) }
+                Imgproc.threshold(
+                    imgSub,
+                    darkMask,
+                    0.0,
+                    255.0,
+                    Imgproc.THRESH_BINARY_INV + Imgproc.THRESH_OTSU,
+                )
+                Imgproc.threshold(
+                    imgSub,
+                    strongDarkMask,
+                    232.0,
+                    255.0,
+                    Imgproc.THRESH_BINARY_INV,
+                )
+                Core.bitwise_or(darkMask, strongDarkMask, darkMask)
+                Imgproc.morphologyEx(darkMask, darkMask, Imgproc.MORPH_CLOSE, refineKernel)
+                Core.bitwise_or(ccSub, darkMask, ccSub)
+
                 // --- Further extend & dilate ----------------------------
                 val ext2 = (dilateSize + 1) / 2 // ceil(dilateSize / 2)
                 val e2 = extendRect(x1, y1, w1, h1, width, height, ext2)
@@ -344,9 +373,16 @@ class CompleteMaskRefiner : MaskRefiner {
             Imgproc.dilate(finalMask, finalMask, finalKernel)
 
             // --- Step 11: Bubble‑region filtering (BubbleDetector) -------
-            // Mirroring the Python dispatch logic: dilate the mask with a
-            // proportional kernel, find external contours, and remove any
-            // region that does NOT look like a speech bubble.
+            // Matches Python dispatch(): only apply bubble filtering when the
+            // configuration explicitly enables it.
+            if (ignoreBubble < 1 || ignoreBubble > 50) {
+                val resultBitmap = matToBitmap(finalMask)
+                return if (procScale < 1f) {
+                    Bitmap.createScaledBitmap(resultBitmap, bitmap.width, bitmap.height, true)
+                        .also { if (it !== resultBitmap) resultBitmap.recycle() }
+                } else resultBitmap
+            }
+
             val bubbleKernelSize = maxOf(
                 (maxOf(finalMask.rows(), finalMask.cols()) * 0.025f).toInt(),
                 1,
@@ -378,7 +414,7 @@ class CompleteMaskRefiner : MaskRefiner {
                         ),
                     ),
                 )
-                if (BubbleDetector.isIgnore(testBlock, bitmap)) {
+                if (BubbleDetector.isIgnore(testBlock, bitmap, ignoreBubble)) {
                     Imgproc.drawContours(
                         finalMask, listOf(contour), -1,
                         Scalar.all(0.0), Imgproc.FILLED,
