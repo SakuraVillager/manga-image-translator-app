@@ -25,6 +25,24 @@ object ModelRegistry {
         sizeBytes = 812_837L,
     )
 
+    /**
+     * AR 48px encoder ONNX model — ConvNeXt backbone + 4 XPOS TransformerEncoder layers.
+     *
+     * Input:  img [N, 3, 48, W] float32, img_widths [N] int64
+     * Output: memory [N, W', 320] float32, input_mask [N, W'] bool
+     *
+     * Exported from the PyTorch checkpoint by scripts/export_ocr_encoder_onnx.py.
+     *
+     * ⚠️ SHA-256 hash is a placeholder — will be updated once the export
+     *    pipeline produces a stable binary.
+     */
+    val OCR_AR_48PX_ENCODER = ModelInfo(
+        name = "ocr_ar_48px_encoder",
+        url = "https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/ocr_ar_48px_encoder.onnx",
+        sha256 = "0000000000000000000000000000000000000000000000000000000000000000",
+        sizeBytes = 96_900_000L,
+    )
+
     /** CTC alphabet (v5) — bundled in assets/models/alphabet-all-v5.txt. */
     val ALPHABET_FILE = ModelInfo(
         name = "alphabet_v5",
@@ -233,6 +251,7 @@ object ModelRegistry {
     val allModels: List<ModelInfo> = listOf(
         CTD_MODEL,
         OCR_48PX_MODEL,
+        OCR_AR_48PX_ENCODER,
         ALPHABET_FILE,
         CJK_FONT,
         AOT_INPAINTING_MODEL,

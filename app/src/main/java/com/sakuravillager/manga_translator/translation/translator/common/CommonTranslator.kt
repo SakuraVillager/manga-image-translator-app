@@ -248,11 +248,9 @@ abstract class CommonTranslator : InfererModule(), Translator {
         }
 
         // ── 7. MTPE dispatch ────────────────────────────────────────
-        // TranslatorConfig currently does not include a `useMtpe` field.
-        // When such a field is added in the future this block can be enabled:
-        //   if (useMtpe) {
-        //       mtpeAdapter.dispatch(queries, cleanedTranslations)
-        //   }
+        if (config.useMtpe) {
+            mtpeAdapter.dispatch(queries, cleanedTranslations)
+        }
 
         // ── 8. Merge back with non-text queries ─────────────────────
         for (i in cleanedTranslations.indices) {

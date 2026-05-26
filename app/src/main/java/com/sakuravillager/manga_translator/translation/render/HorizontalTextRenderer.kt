@@ -91,17 +91,28 @@ class HorizontalTextRenderer(
         // Compute expanded destination quads (matching Python resize_regions_to_font_size)
         var ri = 0
         for (region in textRegions) {
-            val renderText = region.getTranslationForRendering()
+            var renderText = region.getTranslationForRendering()
             if (renderText.isEmpty()) continue
+
+            // Apply uppercase/lowercase (matches Python L1104-1110)
+            renderText = when {
+                config.uppercase -> renderText.uppercase()
+                config.lowercase -> renderText.lowercase()
+                else -> renderText
+            }
 
             val rect = region.minRect
             if (rect.isEmpty) continue
 
+            if (config.renderMask != null && !regionHasRenderMaskCoverage(region, config.renderMask)) {
+                continue
+            }
+
             // Perspective render for horizontal text only; Canvas for vertical text
             if (region.isHorizontal) {
-                val dstPoints = computeDstPointsFromRegion(region)
+                val dstPoints = computeDstPointsFromRegion(region, config)
                 try {
-                    perspectiveRender(result, region, dstPoints, config.disableFontBorder)
+                    perspectiveRender(result, region, dstPoints, config.disableFontBorder, renderText)
                     continue
                 } catch (_: Exception) { /* fall through to Canvas */ }
             }
@@ -518,6 +529,7 @@ class HorizontalTextRenderer(
         region: TextBlock,
         dstPoints: List<PointF>,
         disableBorder: Boolean,
+        overrideText: String? = null,
     ) {
         // Python L272-276: fg_bg_compare
         val (fg, bg) = region.getFontColors()
@@ -543,7 +555,7 @@ class HorizontalTextRenderer(
         val renderHorizontally = region.isHorizontal
 
         // Python L297-320: put_text_horizontal or put_text_vertical
-        val renderedText = region.getTranslationForRendering()
+        val renderedText = overrideText ?: region.getTranslationForRendering()
         val tempBox = if (renderHorizontally) {
             renderTextHorizontal(region.fontSize, renderedText,
                 normH.toInt(), normV.toInt(), region.alignment, useFg, effectiveBg)
@@ -709,10 +721,150 @@ class HorizontalTextRenderer(
         return length
     }
 
-    /** Computes destination quad points from a TextBlock (using minRect) */
-    private fun computeDstPointsFromRegion(region: TextBlock, first: Boolean = false): List<PointF> {
+    /** Computes destination quad points from a TextBlock, applying region expansion
+     *  matching Python's resize_regions_to_font_size (rendering/__init__.py L37-233).
+     *
+     *  Expansion logic:
+     *  1. Single-axis expansion: if horizontal text needs more rows than available,
+     *     scale width; if vertical text needs more columns, scale height.
+     *  2. General scaling: compare original vs translation character count,
+     *     compute font-size increase ratio and text-length ratio, take the max,
+     *     cap at 1.1x.
+     */
+    private fun computeDstPointsFromRegion(region: TextBlock, config: RendererConfig? = null): List<PointF> {
         val rect = region.minRect
-        return listOf(PointF(rect.left, rect.top), PointF(rect.right, rect.top),
-            PointF(rect.right, rect.bottom), PointF(rect.left, rect.bottom))
+        if (rect.isEmpty || region.translation.isBlank()) {
+            return listOf(PointF(rect.left, rect.top), PointF(rect.right, rect.top),
+                PointF(rect.right, rect.bottom), PointF(rect.left, rect.bottom))
+        }
+
+        // Determine target font size (matches Python L68-76)
+        val originalFontSize = if (region.fontSize > 0f) region.fontSize else 1f
+        val targetFontSize = if (config?.fontSize != null && config.fontSize > 0) {
+            config.fontSize.toFloat()
+        } else {
+            originalFontSize + (config?.fontSizeOffset ?: 0)
+        }.coerceAtLeast(1f)
+
+        // Single-axis expansion (matches Python L78-150)
+        var singleAxisExpanded = false
+        var dstPoints: List<PointF>? = null
+
+        if (region.isHorizontal) {
+            val usedRows = region.texts.size.coerceAtLeast(1)
+            // Estimate needed rows based on translation length vs available width
+            val availableWidth = rect.width()
+            val charWidth = targetFontSize * 0.6f  // approximate CJK char width
+            val charsPerRow = if (charWidth > 0f) (availableWidth / charWidth).toInt().coerceAtLeast(1) else 1
+            val translationLen = countTextLength(region.translation)
+            val neededRows = kotlin.math.ceil(translationLen / charsPerRow.toFloat()).toInt().coerceAtLeast(1)
+
+            if (neededRows > usedRows) {
+                val scaleX = ((neededRows - usedRows).toFloat() / usedRows) + 1f
+                dstPoints = scaleRectPoints(rect, region.center, scaleX, 1f, region.angle)
+                singleAxisExpanded = true
+            }
+        } else if (region.isVertical) {
+            val usedCols = region.texts.size.coerceAtLeast(1)
+            val availableHeight = rect.height()
+            val charHeight = targetFontSize
+            val charsPerCol = if (charHeight > 0f) (availableHeight / charHeight).toInt().coerceAtLeast(1) else 1
+            val translationLen = countTextLength(region.translation)
+            val neededCols = kotlin.math.ceil(translationLen / charsPerCol.toFloat()).toInt().coerceAtLeast(1)
+
+            if (neededCols > usedCols) {
+                val scaleY = ((neededCols - usedCols).toFloat() / usedCols) + 1f
+                dstPoints = scaleRectPoints(rect, region.center, 1f, scaleY, region.angle)
+                singleAxisExpanded = true
+            }
+        }
+
+        // General scaling (matches Python L151-204)
+        if (!singleAxisExpanded) {
+            val origTextLen = countTextLength(region.textRaw.ifEmpty { region.text })
+            val transTextLen = countTextLength(region.translation.trim())
+            var targetScale = 1.0
+
+            if (origTextLen > 0 && transTextLen > origTextLen) {
+                val increasePercentage = (transTextLen - origTextLen) / origTextLen
+                val fontIncreaseRatio = (1.0 + increasePercentage * 0.3).coerceIn(1.0, 1.5)
+                targetScale = (1.0 + increasePercentage * 0.3).coerceIn(1.0, 2.0)
+                // Recalculate target font size with increase ratio
+                // (font size update is handled by the caller)
+            }
+
+            val fontSizeScale = if (originalFontSize > 0f) {
+                ((targetFontSize - originalFontSize) / originalFontSize) * 0.4 + 1.0
+            } else 1.0
+
+            var finalScale = maxOf(fontSizeScale, targetScale)
+            finalScale = finalScale.coerceIn(1.0, 1.1)  // Cap at 1.1x (matches Python)
+
+            if (finalScale > 1.001) {
+                dstPoints = scaleRectPoints(rect, region.center, finalScale.toFloat(), finalScale.toFloat(), region.angle)
+            }
+        }
+
+        // Fallback: use minRect corners if no expansion was needed
+        if (dstPoints == null) {
+            dstPoints = listOf(PointF(rect.left, rect.top), PointF(rect.right, rect.top),
+                PointF(rect.right, rect.bottom), PointF(rect.left, rect.bottom))
+        }
+
+        return dstPoints
+    }
+
+    /** Scales a rectangle from its center, then rotates by the given angle.
+     *  Matches Python's affinity.scale + rotate_polygons. */
+    private fun scaleRectPoints(rect: RectF, center: PointF, scaleX: Float, scaleY: Float, angleDeg: Float): List<PointF> {
+        // Scale from center
+        val cx = center.x
+        val cy = center.y
+        val corners = listOf(
+            PointF(rect.left, rect.top),
+            PointF(rect.right, rect.top),
+            PointF(rect.right, rect.bottom),
+            PointF(rect.left, rect.bottom),
+        )
+        val scaled = corners.map { p ->
+            PointF(cx + (p.x - cx) * scaleX, cy + (p.y - cy) * scaleY)
+        }
+        // Rotate if angle is significant
+        if (kotlin.math.abs(angleDeg) > 0.5f) {
+            val rad = Math.toRadians(angleDeg.toDouble()).toFloat()
+            val cos = kotlin.math.cos(rad)
+            val sin = kotlin.math.sin(rad)
+            return scaled.map { p ->
+                val dx = p.x - cx
+                val dy = p.y - cy
+                PointF(cx + dx * cos - dy * sin, cy + dx * sin + dy * cos)
+            }
+        }
+        return scaled
+    }
+
+    private fun regionHasRenderMaskCoverage(region: TextBlock, mask: Bitmap): Boolean {
+        val rect = region.minRect
+        if (rect.isEmpty || mask.width <= 0 || mask.height <= 0) return false
+
+        val left = rect.left.toInt().coerceIn(0, mask.width - 1)
+        val top = rect.top.toInt().coerceIn(0, mask.height - 1)
+        val right = rect.right.toInt().coerceIn(0, mask.width)
+        val bottom = rect.bottom.toInt().coerceIn(0, mask.height)
+        if (right <= left || bottom <= top) return false
+
+        val samplePoints = listOf(
+            PointF(rect.centerX(), rect.centerY()),
+            PointF(rect.left, rect.top),
+            PointF(rect.right, rect.top),
+            PointF(rect.right, rect.bottom),
+            PointF(rect.left, rect.bottom),
+        )
+        return samplePoints.any { point ->
+            val x = point.x.toInt().coerceIn(0, mask.width - 1)
+            val y = point.y.toInt().coerceIn(0, mask.height - 1)
+            val pixel = mask.getPixel(x, y)
+            ((pixel ushr 24) and 0xFF) > 0 || (pixel and 0x00FFFFFF) != 0
+        }
     }
 }

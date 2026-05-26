@@ -27,7 +27,6 @@ import com.sakuravillager.manga_translator.translation.util.image_resize
 import com.sakuravillager.manga_translator.translation.util.load_image
 import com.sakuravillager.manga_translator.translation.util.VisualizeUtils
 import com.sakuravillager.manga_translator.translation.sort.RegionSorter
-import com.sakuravillager.manga_translator.translation.util.downsample_to_max_size
 import com.sakuravillager.manga_translator.translation.dict.DictionaryLoader
 import com.sakuravillager.manga_translator.translation.pipeline.RepetitionHallucinationChecker
 import com.sakuravillager.manga_translator.translation.translator.TranslationValidator
@@ -148,10 +147,10 @@ class TranslationPipeline(
             }
             ctx.img_upscaled = processingBitmap
 
-            // Step 2: Downsample large images to prevent OOM
-            if (maxOf(processingBitmap.width, processingBitmap.height) > config.detector.detectionSize) {
-                processingBitmap = downsample_to_max_size(processingBitmap, config.detector.detectionSize)
-            }
+            // Step 2: Keep full-size image as the working image for the rest of the pipeline.
+            // Only detection needs a smaller input; CtdTextDetector already maps coordinates
+            // back to the original image dimensions. This matches Python where ctx.img_rgb
+            // stays at full upscaled resolution throughout OCR/mask/inpaint/render.
             ctx.original_bitmap = if (processingBitmap !== inputBitmap) inputBitmap else null
             val (img_rgb, img_alpha) = load_image(processingBitmap)
             ctx.img_rgb = img_rgb
@@ -425,9 +424,13 @@ class TranslationPipeline(
                     ctx to bitmap
                 }
 
-                // Translate in batches
+                // Translate either in batches or concurrently, based on config.
                 val translateContexts = preContexts.map { it.first }
-                val translatedContexts = batchTranslateContexts(translateContexts, batchSize, config)
+                val translatedContexts = if (config.batchConcurrent) {
+                    concurrentTranslateContexts(translateContexts, config)
+                } else {
+                    batchTranslateContexts(translateContexts, batchSize, config)
+                }
 
                 // Complete pipeline per page
                 for ((i, ctx) in translatedContexts.withIndex()) {
@@ -550,10 +553,8 @@ class TranslationPipeline(
         }
         ctx.img_upscaled = processingBitmap
 
-        // Step 2: Downsample large images to prevent OOM
-        if (maxOf(processingBitmap.width, processingBitmap.height) > config.detector.detectionSize) {
-            processingBitmap = downsample_to_max_size(processingBitmap, config.detector.detectionSize)
-        }
+        // Step 2: Keep full-size image as the working image (matches Python).
+        // Detection internally handles resizing and maps coordinates back.
         ctx.original_bitmap = if (processingBitmap !== inputBitmap) inputBitmap else null
         ctx.img_rgb = processingBitmap
 
@@ -766,29 +767,50 @@ class TranslationPipeline(
         regions: List<TextBlock>,
         config: TranslationConfig,
     ): List<TextBlock> {
-        // 1. Apply post-dictionary
-        val postDictRegions = applyPostDictionary(regions, config)
+        // 1. Uppercase / lowercase (matches Python L1104-1110)
+        var processed = regions.map { region ->
+            when {
+                config.renderer.uppercase -> region.copy(translation = region.translation.uppercase())
+                config.renderer.lowercase -> region.copy(translation = region.translation.lowercase())
+                else -> region
+            }
+        }
 
-        // 2. Hallucination detection per region
-        val failedRegions = mutableListOf<TextBlock>()
+        // 2. Clean translation output
+        processed = processed.map { region ->
+            region.copy(translation = TranslationValidator.cleanTranslation(region.translation, region.text))
+        }
+
+        // 3. Punctuation normalization (matches Python L1113-1168)
+        processed = normalizePunctuation(processed)
+
+        // 4. Post-dictionary (matches Python L1215-1226)
+        processed = applyPostDictionary(processed, config)
+
+        // 5. Hallucination detection + per-region retry (matches Python L1230-1242)
         if (config.enablePostTranslationCheck) {
-            for (region in postDictRegions) {
-                if (region.translation.isNotBlank() &&
+            val hallucinationFailed = mutableListOf<Int>()
+            processed.forEachIndexed { index, region ->
+                if (region.translation.isNotBlank() && region.text != region.translation &&
                     RepetitionHallucinationChecker.check(region.translation, threshold = config.postCheckRepetitionThreshold)
                 ) {
                     Log.w(TAG, "Hallucination detected for '${region.text}': '${region.translation}'")
-                    failedRegions.add(region)
+                    hallucinationFailed.add(index)
+                }
+            }
+            for (idx in hallucinationFailed) {
+                val region = processed[idx]
+                val retryResult = retrySingleRegionTranslation(region, config)
+                if (retryResult != null) {
+                    processed = processed.toMutableList().also { it[idx] = region.copy(translation = retryResult) }
+                } else {
+                    // Retry failed — keep original text as fallback (do NOT discard the region)
+                    processed = processed.toMutableList().also { it[idx] = region.copy(translation = region.text) }
                 }
             }
         }
 
-        // 3. Retry failed regions (placeholder — real retrySingleRegionTranslation in Task 10)
-        // For now, just keep the original translation for failed regions
-        if (failedRegions.isNotEmpty()) {
-            Log.w(TAG, "Found ${failedRegions.size} regions with hallucinations (will be retried in Task 10)")
-        }
-
-        return postDictRegions
+        return processed
     }
 
     private fun applyPostDictionary(regions: List<TextBlock>, config: TranslationConfig): List<TextBlock> {
@@ -804,7 +826,10 @@ class TranslationPipeline(
     }
 
     private fun filterInvalidTranslations(regions: List<TextBlock>, targetLanguage: String): List<TextBlock> {
-        return regions.map { region ->
+        // NOTE: This method is kept for backward compatibility but the main pipeline
+        // now uses applyFinalFiltering which follows Python's filtering semantics:
+        // remove regions entirely rather than replacing translation with source text.
+        return regions.filter { region ->
             val isValid = TranslationValidator.validate(
                 original = region.text,
                 translation = region.translation,
@@ -812,13 +837,11 @@ class TranslationPipeline(
                 repetitionThreshold = 20,
                 targetLangThreshold = 0.5f,
             )
-            if (isValid) {
-                region
-            } else {
+            if (!isValid) {
                 Log.w("TranslationPipeline",
-                    "Translation validation failed for '${region.text}', falling back to original")
-                region.copy(translation = region.text)
+                    "Translation validation failed for '${region.text}', removing region")
             }
+            isValid
         }
     }
 
@@ -870,6 +893,9 @@ class TranslationPipeline(
         var candidateTranslations = translatableTexts
         val translatorConfig = config.translator.copy(prevContext = buildPreviousPageContext(config.translator.contextPages))
 
+        // Best result so far — starts with original text as fallback
+        var bestRegions = regions.map { it.copy(translation = it.text) }
+
         repeat((if (config.enablePostTranslationCheck) config.postCheckMaxRetryAttempts else 0) + 1) { attempt ->
             candidateTranslations = translator.translate(
                 translatableTexts,
@@ -878,67 +904,86 @@ class TranslationPipeline(
                 translatorConfig,
             )
 
+            // 1. Assign translations
             val remappedTranslations = MutableList(regions.size) { "" }
             translatableIndices.forEachIndexed { orderedIndex, originalIndex ->
                 remappedTranslations[originalIndex] = candidateTranslations.getOrElse(orderedIndex) {
                     regions[originalIndex].text
                 }
             }
-
-            val translatedRegions = regions.mapIndexed { index, region ->
+            var processedRegions = regions.mapIndexed { index, region ->
                 region.copy(translation = remappedTranslations[index])
             }
-            val postDictRegions = applyPostDictionary(translatedRegions, config)
-            val cleanedRegions = postDictRegions.map { region ->
+
+            // 2. Uppercase / lowercase (matches Python L1104-1110)
+            processedRegions = processedRegions.map { region ->
+                when {
+                    config.renderer.uppercase -> region.copy(translation = region.translation.uppercase())
+                    config.renderer.lowercase -> region.copy(translation = region.translation.lowercase())
+                    else -> region
+                }
+            }
+
+            // 3. Clean translation output
+            processedRegions = processedRegions.map { region ->
                 region.copy(translation = TranslationValidator.cleanTranslation(region.translation, region.text))
             }
-            val normalizedRegions = normalizePunctuation(cleanedRegions)
-            // Hallucination check using RepetitionHallucinationChecker (word + phrase level)
-            val hallucinationCheckedRegions = normalizedRegions.map { region ->
-                if (region.translation.isNotBlank() &&
-                    RepetitionHallucinationChecker.check(region.translation, threshold = config.postCheckRepetitionThreshold)
-                ) {
-                    Log.w(TAG, "Hallucination detected for '${region.text}': '${region.translation}'")
-                    region.copy(translation = region.text) // fallback to original text
-                } else {
-                    region
-                }
-            }
-            val validatedRegions = if (config.enablePostTranslationCheck) {
-                hallucinationCheckedRegions.map { region ->
-                    val isValid = TranslationValidator.validate(
-                        original = region.text,
-                        translation = region.translation,
-                        targetLang = config.translator.targetLanguage,
-                        repetitionThreshold = config.postCheckRepetitionThreshold,
-                        targetLangThreshold = config.postCheckTargetLangThreshold,
-                    )
-                    if (isValid) {
-                        region
-                    } else {
-                        region.copy(translation = region.text)
+
+            // 4. Punctuation normalization (matches Python L1113-1168)
+            processedRegions = normalizePunctuation(processedRegions)
+
+            // 5. Post-dictionary (matches Python L1215-1226)
+            processedRegions = applyPostDictionary(processedRegions, config)
+
+            // 6. Hallucination detection + per-region retry (matches Python L1230-1242)
+            if (config.enablePostTranslationCheck) {
+                val hallucinationFailed = mutableListOf<Int>()
+                processedRegions.forEachIndexed { index, region ->
+                    if (region.translation.isNotBlank() && region.text != region.translation &&
+                        RepetitionHallucinationChecker.check(region.translation, threshold = config.postCheckRepetitionThreshold)
+                    ) {
+                        Log.w(TAG, "Hallucination detected for '${region.text}': '${region.translation}'")
+                        hallucinationFailed.add(index)
                     }
                 }
-            } else {
-                hallucinationCheckedRegions
+                // Retry individual hallucinated regions
+                for (idx in hallucinationFailed) {
+                    val region = processedRegions[idx]
+                    val retryResult = retrySingleRegionTranslation(region, config)
+                    if (retryResult != null) {
+                        processedRegions = processedRegions.toMutableList().also {
+                            it[idx] = region.copy(translation = retryResult)
+                        }
+                    } else {
+                        // Retry failed — keep original text as fallback
+                        processedRegions = processedRegions.toMutableList().also {
+                            it[idx] = region.copy(translation = region.text)
+                        }
+                    }
+                }
             }
 
-            val filteredRegions = applyFinalFiltering(validatedRegions, config)
-
+            // 7. Page-level target language check (matches Python L1248-1302)
             val pageLevelValid = !config.enablePostTranslationCheck ||
-                filteredRegions.size <= 5 ||
+                processedRegions.size <= 5 ||
                 isPageTranslationValid(
-                    filteredRegions,
+                    processedRegions,
                     config.translator.targetLanguage,
                     config.postCheckTargetLangThreshold,
                 )
 
             if (!pageLevelValid) {
                 Log.w(
-                    "TranslationPipeline",
+                    TAG,
                     "Page-level target language check failed, retrying attempt ${attempt + 1}/${config.postCheckMaxRetryAttempts + 1}",
                 )
             }
+
+            // 8. Final filtering (skip-language, same-language, digits, regex, unchanged)
+            val filteredRegions = applyFinalFiltering(processedRegions, config)
+
+            // Track best result
+            bestRegions = filteredRegions
 
             val allValid = filteredRegions.all { region ->
                 region.translation.isNotBlank() && region.translation != region.text || region.text.isBlank()
@@ -949,7 +994,7 @@ class TranslationPipeline(
             }
         }
 
-        return regions.map { region -> region.copy(translation = region.text) }.toMutableList()
+        return bestRegions.toMutableList()
     }
 
     /**

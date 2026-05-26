@@ -8,6 +8,10 @@ data class ChatCompletionRequest(
     val model: String = "gpt-4o-mini",
     val messages: List<ChatMessage>,
     val temperature: Double = 0.0,
+    @SerialName("top_p")
+    val topP: Double = 1.0,
+    @SerialName("max_tokens")
+    val maxTokens: Int? = null,
 )
 
 @Serializable

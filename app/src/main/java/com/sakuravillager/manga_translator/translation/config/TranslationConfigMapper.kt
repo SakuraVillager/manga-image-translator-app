@@ -14,12 +14,13 @@ import com.sakuravillager.manga_translator.translation.data.config.RendererType
 import com.sakuravillager.manga_translator.translation.data.config.TranslationConfig
 import com.sakuravillager.manga_translator.translation.data.config.TranslatorConfig
 import com.sakuravillager.manga_translator.translation.data.config.TranslatorType
+import com.sakuravillager.manga_translator.translation.data.TextDirection
 
 object TranslationConfigMapper {
 
     fun map(prefs: AppPreferences): TranslationConfig {
         return TranslationConfig(
-            detector = DetectorConfig(detector = safeEnumValue(prefs.detectorType, DetectorType.CTD)),
+            detector = DetectorConfig(detector = mapDetectorType(prefs.detectorType)),
             ocr = OcrConfig(ocrEngine = safeEnumValue(prefs.ocrEngineType, OcrEngineType.MODEL_48PX)),
             colorizer = ColorizerConfig(),
             upscale = UpscaleConfig(),
@@ -30,9 +31,36 @@ object TranslationConfigMapper {
                 apiBase = prefs.apiBase,
                 model = prefs.modelName,
             ),
-            inpainter = InpainterConfig(inpainter = safeEnumValue(prefs.inpainterType, InpainterType.LAMA_LARGE)),
-            renderer = RendererConfig(),
+            inpainter = InpainterConfig(inpainter = mapInpainterType(prefs.inpainterType)),
+            renderer = RendererConfig(direction = mapTextDirection(prefs.textDirection)),
         )
+    }
+
+    /** Maps legacy detector type strings to the correct enum.
+     *  "default_contour" and "default" both map to CTD (Python's default detector). */
+    private fun mapDetectorType(value: String): DetectorType {
+        return when (value.lowercase()) {
+            "default_contour", "default" -> DetectorType.CTD
+            else -> safeEnumValue(value, DetectorType.CTD)
+        }
+    }
+
+    /** Maps legacy inpainter type strings to the correct enum.
+     *  "inpaint_lama" maps to LAMA_LARGE (Python's default inpainter). */
+    private fun mapInpainterType(value: String): InpainterType {
+        return when (value.lowercase()) {
+            "inpaint_lama" -> InpainterType.LAMA_LARGE
+            else -> safeEnumValue(value, InpainterType.LAMA_LARGE)
+        }
+    }
+
+    private fun mapTextDirection(value: String): TextDirection {
+        return when (value.lowercase()) {
+            "horizontal" -> TextDirection.HORIZONTAL
+            "vertical" -> TextDirection.VERTICAL
+            "rtl", "horizontal_rtl" -> TextDirection.HORIZONTAL_RTL
+            else -> TextDirection.AUTO
+        }
     }
 
     private inline fun <reified T : Enum<T>> safeEnumValue(name: String, default: T): T {

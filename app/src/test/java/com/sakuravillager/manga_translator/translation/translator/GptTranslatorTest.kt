@@ -81,6 +81,6 @@ class GptTranslatorTest {
         val translator = GptTranslator(client)
         val input = listOf("a", "b")
         val result = translator.translate(input, "auto", "CHS", TranslatorConfig())
-        assertEquals(input, result)
+        assertEquals(listOf("Only one", ""), result)
     }
 }

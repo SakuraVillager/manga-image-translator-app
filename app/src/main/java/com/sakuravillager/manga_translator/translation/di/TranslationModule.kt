@@ -17,6 +17,7 @@ import com.sakuravillager.manga_translator.translation.data.config.InpainterType
 import com.sakuravillager.manga_translator.translation.data.config.OcrEngineType
 import com.sakuravillager.manga_translator.translation.data.config.TranslationConfig
 import com.sakuravillager.manga_translator.translation.data.config.UpscalerType
+import com.sakuravillager.manga_translator.translation.data.config.RendererType
 import com.sakuravillager.manga_translator.translation.detection.CtdTextDetector
 import com.sakuravillager.manga_translator.translation.merge.DefaultTextlineMerger
 import com.sakuravillager.manga_translator.translation.model.ModelDownloadManager
@@ -82,18 +83,21 @@ val translationModule = module {
     single<TextDetector> {
         val config: TranslationConfig = get()
         when (config.detector.detector) {
-            DetectorType.CTD -> {
+            DetectorType.NONE -> NoOpTextDetector()
+            // DEFAULT/DBCONVNEXT/CRAFT/PADDLE all map to CTD (the only real detector on Android).
+            // Matches Python: default detector is CTD; DBCONVNEXT/CRAFT/PADDLE are aliases
+            // that fall back to CTD when the native model is unavailable.
+            else -> {
                 CtdTextDetector.initialize(get(), get(), androidContext())
                 CtdTextDetector.getInstance()
             }
-            else -> NoOpTextDetector()
         }
     }
 
     // TextRecognizer — CTC model loaded from assets, no ONNX session needed
     single<TextRecognizer> {
         val config: TranslationConfig = get()
-        buildTextRecognizer(config, androidContext())
+        buildTextRecognizer(config, androidContext(), get())
     }
 
     // TextlineMerger — always DefaultTextlineMerger (pure algorithm, no model dependency)
@@ -150,18 +154,36 @@ val translationModule = module {
     factory<Inpainter> {
         val config: TranslationConfig = get()
         when (config.inpainter.inpainter) {
+            // DEFAULT maps to LaMA (Python's default inpainter is LaMA).
+            InpainterType.DEFAULT ->
+                LamaLargeInpainter(get(), get(), androidContext())
             InpainterType.AOT ->
                 AotInpainter(get(), get(), androidContext())
             InpainterType.LAMA_LARGE ->
                 LamaLargeInpainter(get(), get(), androidContext())
             InpainterType.LAMA_MPE ->
                 LamaMPEInpainter(get(), get(), androidContext())
+            // SIMPLE_FILL: fill masked region with white (Python's "no inpainting, just erase").
+            // NONE: no inpainting at all — fill with white to clear text area.
             InpainterType.SIMPLE_FILL -> NoneInpainter()
-            InpainterType.NONE -> OriginalInpainter()
+            InpainterType.NONE -> NoneInpainter()
+            // ORIGINAL: return the original bitmap unchanged (Python's "original" inpainter).
+            InpainterType.ORIGINAL -> OriginalInpainter()
             else -> LamaLargeInpainter(get(), get(), androidContext())
         }
     }
-    factory<TextRenderer> { HorizontalTextRenderer(androidContext(), get()) }
+    factory<TextRenderer> {
+        val config: TranslationConfig = get()
+        when (config.renderer.renderer) {
+            // NONE: skip rendering entirely, return inpainted bitmap as-is.
+            // Matches Python RendererType.none — no text overlay.
+            RendererType.NONE -> NoOpTextRenderer()
+            // DEFAULT and MANGA2ENG both use HorizontalTextRenderer.
+            // MANGA2ENG in Python switches to English-oriented rendering;
+            // on Android the same renderer handles both via direction/alignment config.
+            else -> HorizontalTextRenderer(androidContext(), get())
+        }
+    }
 
     // TranslationConfig — factory reading from DataStore via PreferencesProvider
     factory {
@@ -289,11 +311,15 @@ private fun createTranslator(
     }
 }
 
-private fun buildTextRecognizer(config: TranslationConfig, context: Context): TextRecognizer {
+private fun buildTextRecognizer(
+    config: TranslationConfig,
+    context: Context,
+    modelDownloadManager: ModelDownloadManager,
+): TextRecognizer {
     return try {
         when (config.ocr.ocrEngine) {
             OcrEngineType.MODEL_48PX_CTC -> Model48pxCTCOCR(context)
-            OcrEngineType.MODEL_48PX -> Model48pxBeamRecognizer(context)
+            OcrEngineType.MODEL_48PX -> Model48pxBeamRecognizer(context, modelDownloadManager)
             OcrEngineType.MODEL_32PX -> Model32pxBeamRecognizer(context)
             OcrEngineType.MOCR -> ModelMangaOCR(context)
         }

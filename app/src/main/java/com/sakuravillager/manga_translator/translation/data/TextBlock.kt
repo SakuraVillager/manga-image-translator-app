@@ -131,9 +131,8 @@ data class TextBlock(
         val maxY = allPoints.maxOf { it.y }
         val cx = (minX + maxX) / 2
         val cy = (minY + maxY) / 2
-        val rad = Math.toRadians(-angle.toDouble())
-        val cos = cos(rad).toFloat()
-        val sin = sin(rad).toFloat()
+        val cos = cos(-angle)
+        val sin = sin(-angle)
         return lines.map { line ->
             line.map { p ->
                 val dx = p.x - cx
@@ -151,8 +150,8 @@ data class TextBlock(
         val maxX = flatPts.maxOf { it.x }; val maxY = flatPts.maxOf { it.y }
         if (angle != 0f) {
             val cx = (minX + maxX) / 2; val cy = (minY + maxY) / 2
-            val rad = Math.toRadians(angle.toDouble())
-            val cos = cos(rad).toFloat(); val sin = sin(rad).toFloat()
+            val cos = cos(angle)
+            val sin = sin(angle)
             val corners = listOf(
                 PointF(minX, minY), PointF(maxX, minY),
                 PointF(maxX, maxY), PointF(minX, maxY),

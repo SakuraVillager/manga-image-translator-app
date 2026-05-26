@@ -50,6 +50,9 @@ class TranslationConfigTest {
         assertFalse(config.ignoreErrors)
         assertFalse(config.forceSimpleSort)
         assertFalse(config.verbose)
+        assertEquals(1, config.batchSize)
+        assertFalse(config.batchConcurrent)
+        assertEquals(0L, config.modelsTtlMs)
     }
 
     @Test
@@ -93,10 +96,14 @@ class TranslationConfigTest {
         val config = TranslatorConfig()
         assertEquals(TranslatorType.GPT_COMPATIBLE, config.translator)
         assertEquals("CHS", config.targetLanguage)
+        assertFalse(config.noTextLangSkip)
         assertNull(config.skipLanguage)
         assertNull(config.apiKey)
         assertNull(config.apiBase)
         assertNull(config.model)
+        assertNull(config.translatorChain)
+        assertNull(config.selectiveTranslation)
+        assertFalse(config.useMtpe)
     }
 
     // ── OcrConfig ──────────────────────────────────────────────────
@@ -129,10 +136,14 @@ class TranslationConfigTest {
         assertEquals(TextAlignment.AUTO, config.alignment)
         assertEquals(0, config.fontSizeOffset)
         assertEquals(-1, config.fontSizeMinimum)
+        assertNull(config.fontSize)
         assertEquals(TextDirection.AUTO, config.direction)
         assertFalse(config.disableFontBorder)
         assertNull(config.fontColor)
         assertNull(config.lineSpacing)
+        assertFalse(config.uppercase)
+        assertFalse(config.lowercase)
+        assertFalse(config.noHyphenation)
         assertTrue(config.rtl)
     }
 
@@ -234,8 +245,8 @@ class TranslationConfigTest {
     // ── InpainterType enum ─────────────────────────────────────────
 
     @Test
-    fun inpainterTypeEnumHasFiveValues() {
-        assertEquals(5, InpainterType.values().size)
+    fun inpainterTypeEnumHasSevenValues() {
+        assertEquals(7, InpainterType.values().size)
     }
 
     @Test
@@ -246,7 +257,9 @@ class TranslationConfigTest {
             InpainterType.LAMA_MPE,
             InpainterType.AOT,
             InpainterType.SIMPLE_FILL,
-            InpainterType.NONE
+            InpainterType.NONE,
+            InpainterType.DEFAULT,
+            InpainterType.ORIGINAL
         )
     }
 

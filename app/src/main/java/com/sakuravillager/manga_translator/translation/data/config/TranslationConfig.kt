@@ -20,4 +20,7 @@ data class TranslationConfig(
     val ignoreErrors: Boolean = false,
     val forceSimpleSort: Boolean = false,
     val verbose: Boolean = false,
+    val batchSize: Int = 1,
+    val batchConcurrent: Boolean = false,
+    val modelsTtlMs: Long = 0L,
 )
