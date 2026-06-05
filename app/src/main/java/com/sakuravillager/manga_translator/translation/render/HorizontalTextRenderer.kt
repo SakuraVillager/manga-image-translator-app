@@ -51,22 +51,26 @@ class HorizontalTextRenderer(
 
     override suspend fun prepare() {
         typeface = try {
-            Typeface.createFromAsset(context.assets, "fonts/NotoSansCJK-Regular.ttc")
+            Typeface.createFromAsset(context.assets, "fonts/NotoSansCJKjp-Regular.otf")
         } catch (_: Exception) {
             try {
-                Typeface.createFromAsset(context.assets, "fonts/NotoSansCJK-Regular.ttf")
+                Typeface.createFromAsset(context.assets, "fonts/NotoSansCJK-Regular.ttc")
             } catch (_: Exception) {
-                // Assets not bundled — try runtime download
                 try {
-                    Log.i(name, "Downloading CJK font...")
-                    val fontFile = modelDownloadManager.ensureModel(ModelRegistry.CJK_FONT)
-                    Typeface.createFromFile(fontFile).also {
-                        Log.i(name, "Font loaded successfully")
+                    Typeface.createFromAsset(context.assets, "fonts/NotoSansCJK-Regular.ttf")
+                } catch (_: Exception) {
+                    // Assets not bundled — try runtime download
+                    try {
+                        Log.i(name, "Downloading CJK font...")
+                        val fontFile = modelDownloadManager.ensureModel(ModelRegistry.CJK_FONT)
+                        Typeface.createFromFile(fontFile).also {
+                            Log.i(name, "Font loaded successfully")
+                        }
+                    } catch (e: Exception) {
+                        Log.w(name, "CJK font download failed: ${e.message}")
+                        Log.w(name, "CJK font not found, falling back to system default")
+                        Typeface.DEFAULT
                     }
-                } catch (e: Exception) {
-                    Log.w(name, "CJK font download failed: ${e.message}")
-                    Log.w(name, "CJK font not found, falling back to system default")
-                    Typeface.DEFAULT
                 }
             }
         }
@@ -215,8 +219,8 @@ class HorizontalTextRenderer(
                 // First pass: stroke (border)
                 paint.style = Paint.Style.STROKE
                 paint.strokeWidth = region.strokeWidth
-                paint.color = bgColor
-                applyRegionTextStyle(paint, region, fgColor, textSize)
+                applyRegionTextStyle(paint, region, fgColor, textSize)  // 先调用（会设 fgColor）
+                paint.color = bgColor  // 再覆盖为 bgColor，确保描边颜色不被覆盖
                 canvas.drawText(renderText, x, y, paint)
             }
             // Second pass: fill (foreground)
@@ -245,7 +249,8 @@ class HorizontalTextRenderer(
     ) {
         // Scale font to fit the available box, then place glyphs using measured bounds.
         // This is closer to the Python renderer than anchoring by font size alone.
-        val renderText = text.trim()
+        // Apply CJK punctuation mapping for vertical rendering (matches Python text_render.py L308)
+        val renderText = CjkPunctuationMapper.translateForVertical(text.trim())
         if (renderText.isEmpty()) return
 
         val availableWidth = (rect.width() - strokeWidth * 2f).coerceAtLeast(1f)
@@ -555,7 +560,13 @@ class HorizontalTextRenderer(
         val renderHorizontally = region.isHorizontal
 
         // Python L297-320: put_text_horizontal or put_text_vertical
-        val renderedText = overrideText ?: region.getTranslationForRendering()
+        // Apply CJK punctuation mapping for perspective rendering (matches Python CJK_Compatibility_Forms_translate)
+        val rawText = overrideText ?: region.getTranslationForRendering()
+        val renderedText = if (renderHorizontally) {
+            CjkPunctuationMapper.translateForHorizontal(rawText)
+        } else {
+            CjkPunctuationMapper.translateForVertical(rawText)
+        }
         val tempBox = if (renderHorizontally) {
             renderTextHorizontal(region.fontSize, renderedText,
                 normH.toInt(), normV.toInt(), region.alignment, useFg, effectiveBg)
@@ -668,6 +679,18 @@ class HorizontalTextRenderer(
                 TextAlignment.RIGHT -> (w - paint.measureText(text)).coerceAtLeast(0f)
                 else -> 0f
             }
+            // STROKE pass: draw border first (matches Python put_text_horizontal stroker)
+            if (bg != 0) {
+                val strokePaint = Paint(paint).apply {
+                    style = Paint.Style.STROKE
+                    strokeWidth = maxOf(fontSize * 0.07f, 1f)  // 对齐 Python: fontSize * 0.07
+                    color = bg
+                    strokeJoin = Paint.Join.ROUND
+                    strokeCap = Paint.Cap.ROUND
+                }
+                drawText(text, x, y, strokePaint)
+            }
+            // FILL pass: draw foreground text
             drawText(text, x, y, paint)
         }
         return bmp
@@ -740,11 +763,12 @@ class HorizontalTextRenderer(
 
         // Determine target font size (matches Python L68-76)
         val originalFontSize = if (region.fontSize > 0f) region.fontSize else 1f
+        val minimumFontSize = config?.fontSizeMinimum?.takeIf { it > 0 }?.toFloat() ?: 1f
         val targetFontSize = if (config?.fontSize != null && config.fontSize > 0) {
             config.fontSize.toFloat()
         } else {
             originalFontSize + (config?.fontSizeOffset ?: 0)
-        }.coerceAtLeast(1f)
+        }.coerceAtLeast(minimumFontSize)
 
         // Single-axis expansion (matches Python L78-150)
         var singleAxisExpanded = false
@@ -761,7 +785,8 @@ class HorizontalTextRenderer(
 
             if (neededRows > usedRows) {
                 val scaleX = ((neededRows - usedRows).toFloat() / usedRows) + 1f
-                dstPoints = scaleRectPoints(rect, region.center, scaleX, 1f, region.angle)
+                // 对齐 Python: origin=(minx, miny) 即左下角缩放
+                dstPoints = scaleRectPoints(rect, PointF(rect.left, rect.top), scaleX, 1f, region.angle)
                 singleAxisExpanded = true
             }
         } else if (region.isVertical) {
@@ -774,7 +799,8 @@ class HorizontalTextRenderer(
 
             if (neededCols > usedCols) {
                 val scaleY = ((neededCols - usedCols).toFloat() / usedCols) + 1f
-                dstPoints = scaleRectPoints(rect, region.center, 1f, scaleY, region.angle)
+                // 对齐 Python: origin=(minx, miny) 即左下角缩放
+                dstPoints = scaleRectPoints(rect, PointF(rect.left, rect.top), 1f, scaleY, region.angle)
                 singleAxisExpanded = true
             }
         }
@@ -816,7 +842,7 @@ class HorizontalTextRenderer(
 
     /** Scales a rectangle from its center, then rotates by the given angle.
      *  Matches Python's affinity.scale + rotate_polygons. */
-    private fun scaleRectPoints(rect: RectF, center: PointF, scaleX: Float, scaleY: Float, angleDeg: Float): List<PointF> {
+    private fun scaleRectPoints(rect: RectF, center: PointF, scaleX: Float, scaleY: Float, angleRad: Float): List<PointF> {
         // Scale from center
         val cx = center.x
         val cy = center.y
@@ -829,11 +855,10 @@ class HorizontalTextRenderer(
         val scaled = corners.map { p ->
             PointF(cx + (p.x - cx) * scaleX, cy + (p.y - cy) * scaleY)
         }
-        // Rotate if angle is significant
-        if (kotlin.math.abs(angleDeg) > 0.5f) {
-            val rad = Math.toRadians(angleDeg.toDouble()).toFloat()
-            val cos = kotlin.math.cos(rad)
-            val sin = kotlin.math.sin(rad)
+        // Rotate if angle is significant (0.01 rad ≈ 0.57°, threshold to avoid floating-point noise)
+        if (kotlin.math.abs(angleRad) > 0.01f) {
+            val cos = kotlin.math.cos(angleRad)
+            val sin = kotlin.math.sin(angleRad)
             return scaled.map { p ->
                 val dx = p.x - cx
                 val dy = p.y - cy

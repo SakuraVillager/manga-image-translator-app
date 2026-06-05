@@ -31,16 +31,42 @@ object ModelRegistry {
      * Input:  img [N, 3, 48, W] float32, img_widths [N] int64
      * Output: memory [N, W', 320] float32, input_mask [N, W'] bool
      *
-     * Exported from the PyTorch checkpoint by scripts/export_ocr_encoder_onnx.py.
-     *
-     * ⚠️ SHA-256 hash is a placeholder — will be updated once the export
-     *    pipeline produces a stable binary.
+     * Exported from the PyTorch checkpoint by scripts/export_ocr_ar_48px_onnx.py.
      */
     val OCR_AR_48PX_ENCODER = ModelInfo(
         name = "ocr_ar_48px_encoder",
         url = "https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/ocr_ar_48px_encoder.onnx",
-        sha256 = "0000000000000000000000000000000000000000000000000000000000000000",
-        sizeBytes = 96_900_000L,
+        sha256 = "e397b5f3ac53ff5971b7b4e549eb1286342beb420b7f99d6597cdc0e49726c72",
+        sizeBytes = 1_303_068L,
+    )
+
+    /**
+     * AR 48px decoder step ONNX model — 5 XPOS TransformerDecoder layers + prediction heads.
+     *
+     * Single-step autoregressive decoder with PrecomputedXPOS lookup tables.
+     *
+     * Inputs:
+     *   token_ids   [N]        int64  — current token (START=1 initially)
+     *   step        []         int64  — scalar step index (0-based)
+     *   memory      [N,W',320] float  — encoder output
+     *   memory_mask [N,W']     bool   — encoder padding mask
+     *   cache_flat  [N*6,255,320] float — KV cache (zeros initially)
+     *
+     * Outputs:
+     *   logits        [N, dictSize] — character probability logits
+     *   fg_colors     [N, 3]        — foreground RGB (0-1 range)
+     *   bg_colors     [N, 3]        — background RGB (0-1 range)
+     *   fg_indicators [N, 2]        — foreground presence indicator
+     *   bg_indicators [N, 2]        — background presence indicator
+     *   cache_flat_out [N*6,255,320] — updated KV cache
+     *
+     * Exported from the PyTorch checkpoint by scripts/export_ocr_ar_48px_onnx.py.
+     */
+    val OCR_AR_48PX_DECODER = ModelInfo(
+        name = "ocr_ar_48px_decoder",
+        url = "https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/ocr_ar_48px_decoder.onnx",
+        sha256 = "d8953e1ed75e7ab68ff9a1c62882bb97b2d9d0cb123408b3c01b3a6b538e1787",
+        sizeBytes = 103_498_951L,
     )
 
     /** CTC alphabet (v5) — bundled in assets/models/alphabet-all-v5.txt. */
@@ -52,35 +78,37 @@ object ModelRegistry {
     )
 
     /**
-     * CJK font (Noto Sans CJK KR Regular) — downloaded at runtime if not bundled.
+     * CJK font (Noto Sans CJK JP Regular) — downloaded at runtime if not bundled.
      *
      * Source: googlefonts/noto-cjk Sans2.004 release.
      * Mirrored on jsDelivr CDN for fast, cacheable downloads.
+     * Japanese variant ensures correct kanji glyphs for manga text.
      */
     val CJK_FONT = ModelInfo(
-        name = "noto_sans_cjk_kr_regular",
-        url = "https://cdn.jsdelivr.net/gh/googlefonts/noto-cjk@Sans2.004/Sans/OTF/Korean/NotoSansCJKkr-Regular.otf",
-        sha256 = "6bcb2a0703aa137e874fc2dffa85f6c21ba9a67fa329e81b8c801663af7e992a",
-        sizeBytes = 16_433_112L,
+        name = "noto_sans_cjk_jp_regular",
+        url = "https://cdn.jsdelivr.net/gh/googlefonts/noto-cjk@Sans2.004/Sans/OTF/Japanese/NotoSansCJKjp-Regular.otf",
+        sha256 = "68a3fc98800b2a27b371f2fb79991daf3633bd89309d4ffaa6946fd587f375b5",
+        sizeBytes = 16_467_736L,
     )
 
     /**
      * AOT-GAN inpainting model (ONNX).
      *
-     * Bundled in app/src/main/assets/models/aot_inpainting.onnx (~1.2 MB).
+     * Bundled in app/src/main/assets/models/aot_inpainting.onnx (~22.4 MB).
      * Falls back to GitHub Release download if the asset is missing.
      *
-     * Exported from the PyTorch checkpoint by export_onnx.py:
+     * Exported from the PyTorch checkpoint by export_aot_inpainting_onnx.py:
      *   https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/inpainting.ckpt
      *
      * Architecture: AOTGenerator(4, 3) — 4 input channels (mask+R/G/B),
      * 3 output channels (R/G/B). Input normalized to [-1, 1].
+     * Weight Standardization frozen before export (452 ONNX nodes).
      */
     val AOT_INPAINTING_MODEL = ModelInfo(
         name = "aot_inpainting",
         url = "https://github.com/zyddnys/manga-image-translator/releases/download/beta-0.3/aot_inpainting.onnx",
-        sha256 = "a3fc6e855133cb65fd56eb5f500f2f5facafda90d85c652332361efee7b2382b",
-        sizeBytes = 23_997_372L,
+        sha256 = "01f7a09a108e55c8acaab957a960e43608601c8b08c136ee6b82006e0aa6dcae",
+        sizeBytes = 23_471_634L,
     )
 
     /**

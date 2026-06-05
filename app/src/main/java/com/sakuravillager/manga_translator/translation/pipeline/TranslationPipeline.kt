@@ -28,8 +28,11 @@ import com.sakuravillager.manga_translator.translation.util.load_image
 import com.sakuravillager.manga_translator.translation.util.VisualizeUtils
 import com.sakuravillager.manga_translator.translation.sort.RegionSorter
 import com.sakuravillager.manga_translator.translation.dict.DictionaryLoader
+import com.sakuravillager.manga_translator.translation.language.LanguageDetector
+import com.sakuravillager.manga_translator.translation.language.ScriptLanguageDetector
 import com.sakuravillager.manga_translator.translation.pipeline.RepetitionHallucinationChecker
 import com.sakuravillager.manga_translator.translation.translator.TranslationValidator
+import com.sakuravillager.manga_translator.translation.translator.common.TextUtils
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -51,6 +54,7 @@ class TranslationPipeline(
     private val inpainter: Inpainter,
     private val renderer: TextRenderer,
     private val config: TranslationConfig,
+    private val languageDetector: LanguageDetector = ScriptLanguageDetector,
 ) {
     companion object {
         private const val TAG = "TranslationPipeline"
@@ -111,6 +115,7 @@ class TranslationPipeline(
         return try {
             // Step 0: Prepare
             _progress.value = TranslationProgress.Loading("Preparing models...")
+            cleanupStaleModels(config.modelsTtlMs)
             colorizer.prepare()
             upscaler.prepare()
             detector.prepare()
@@ -266,11 +271,17 @@ class TranslationPipeline(
                 // Continue with unmodified regions
             }
 
+            ctx.text_regions = filterBeforeTranslation(ctx.text_regions, config).toMutableList()
+            if (ctx.text_regions.isEmpty()) {
+                AppLogger.i(TAG, "[PRE-FILTER] No text regions remain before translation")
+                return TranslationResult.NoText(processingBitmap)
+            }
+
             // Step 6: Translation
             _progress.value = TranslationProgress.Processing("Translating...", 0.5f)
             // Detect source language from merged text
             val allText = ctx.text_regions.joinToString("") { it.text }
-            ctx.from_language = detectSourceLanguage(allText).first
+            ctx.from_language = languageDetector.detect(allText).language
             try {
                 ctx.text_regions = translateWithValidationRetry(ctx.text_regions, config, ctx.from_language)
                 trackModelUsage("translation", config.translator.translator.name)
@@ -359,15 +370,19 @@ class TranslationPipeline(
         } catch (e: Exception) {
             TranslationResult.Error(e.message ?: "Unknown error", e)
         } finally {
-            colorizer.release()
-            upscaler.release()
-            detector.release()
-            recognizer.release()
-            merger.release()
-            translator.release()
-            maskRefiner.release()
-            inpainter.release()
-            renderer.release()
+            if (config.modelsTtlMs <= 0L) {
+                colorizer.release()
+                upscaler.release()
+                detector.release()
+                recognizer.release()
+                merger.release()
+                translator.release()
+                maskRefiner.release()
+                inpainter.release()
+                renderer.release()
+            } else {
+                cleanupStaleModels(config.modelsTtlMs)
+            }
         }
     }
 
@@ -389,6 +404,7 @@ class TranslationPipeline(
         try {
             // Prepare once for all images
             _progress.value = TranslationProgress.Loading("Preparing models for batch...")
+            cleanupStaleModels(config.modelsTtlMs)
             colorizer.prepare()
             upscaler.prepare()
             detector.prepare()
@@ -448,15 +464,19 @@ class TranslationPipeline(
 
             return results
         } finally {
-            colorizer.release()
-            upscaler.release()
-            detector.release()
-            recognizer.release()
-            merger.release()
-            translator.release()
-            maskRefiner.release()
-            inpainter.release()
-            renderer.release()
+            if (config.modelsTtlMs <= 0L) {
+                colorizer.release()
+                upscaler.release()
+                detector.release()
+                recognizer.release()
+                merger.release()
+                translator.release()
+                maskRefiner.release()
+                inpainter.release()
+                renderer.release()
+            } else {
+                cleanupStaleModels(config.modelsTtlMs)
+            }
         }
     }
 
@@ -622,9 +642,11 @@ class TranslationPipeline(
             AppLogger.i(TAG, "[BATCH-BRACKETS]   [$i] '${r.text}'")
         }
 
+        ctx.text_regions = filterBeforeTranslation(ctx.text_regions, config).toMutableList()
+
         // Detect source language from merged text
         val allText = ctx.text_regions.joinToString("") { it.text }
-        ctx.from_language = detectSourceLanguage(allText).first
+        ctx.from_language = languageDetector.detect(allText).language
 
         return ctx  // contains text_regions ready for translation
     }
@@ -716,6 +738,67 @@ class TranslationPipeline(
             Log.w("TranslationPipeline", "Failed to apply pre-dictionary: ${e.message}")
             regions
         }
+    }
+
+    /**
+     * Filters out regions before translation based on length, readability, language detection.
+     *
+     * ## Skip-language contract
+     * - `skipLanguage` check is **region-level**: each region is independently language-detected.
+     * - This matches Python's per-textline skip behavior (manga_translator.py L782-784).
+     * - The detected `sourceLanguage` is stored on the region for use by downstream stages.
+     * - `noTextLangSkip=false` (default): skip regions whose source language equals the target language.
+     * - `noTextLangSkip=true`: skip the source==target check entirely (always translate).
+     */
+    private fun filterBeforeTranslation(regions: List<TextBlock>, config: TranslationConfig): List<TextBlock> {
+        val skipLanguages = config.translator.skipLanguage
+            ?.split(',')
+            ?.map { it.trim().uppercase() }
+            ?.filter { it.isNotEmpty() }
+            .orEmpty()
+
+        var tooShort = 0
+        var notValuable = 0
+        var skipLang = 0
+        var sameAsTarget = 0
+
+        val filtered = regions.mapNotNull { region ->
+            val text = region.text.trim()
+            if (text.length < config.ocr.minTextLength) {
+                tooShort++
+                return@mapNotNull null
+            }
+            if (!TextUtils.isValuableText(text)) {
+                notValuable++
+                return@mapNotNull null
+            }
+
+            val sourceLanguage = languageDetector.detect(text).language
+            if (skipLanguages.isNotEmpty() && sourceLanguage in skipLanguages) {
+                skipLang++
+                return@mapNotNull null
+            }
+            if (!config.translator.noTextLangSkip &&
+                sourceLanguage != "UNKNOWN" &&
+                sourceLanguage.equals(config.translator.targetLanguage, ignoreCase = true)
+            ) {
+                sameAsTarget++
+                return@mapNotNull null
+            }
+
+            region.copy(
+                text = text,
+                sourceLanguage = if (sourceLanguage == "UNKNOWN") region.sourceLanguage else sourceLanguage,
+                language = if (sourceLanguage == "UNKNOWN") region.language else sourceLanguage,
+            )
+        }
+
+        AppLogger.i(
+            TAG,
+            "[PRE-FILTER] ${regions.size} -> ${filtered.size} regions " +
+                "(tooShort=$tooShort notValuable=$notValuable skipLang=$skipLang sameTarget=$sameAsTarget)",
+        )
+        return filtered
     }
 
     /**
@@ -866,7 +949,7 @@ class TranslationPipeline(
         if (allTranslations.isEmpty()) return true
 
         val mergedText = allTranslations.joinToString("")
-        val (detectedLang, _) = detectSourceLanguage(mergedText)
+        val detectedLang = languageDetector.detect(mergedText).language
 
         Log.d(TAG, "Target language check: detected=$detectedLang, expected=$targetLang")
         return detectedLang.equals(targetLang, ignoreCase = true)
@@ -1209,6 +1292,12 @@ class TranslationPipeline(
         }
     }
 
+    /**
+     * Post-translation filter: removes regions whose translation failed validation,
+     * was filtered by skip-language rules, or matches unwanted patterns.
+     *
+     * Same skip-language contract as [filterBeforeTranslation]: region-level, detected per-region.
+     */
     private fun applyFinalFiltering(regions: List<TextBlock>, config: TranslationConfig): List<TextBlock> {
         val skipLanguages = config.translator.skipLanguage
             ?.split(',')
@@ -1223,45 +1312,45 @@ class TranslationPipeline(
         var filteredRegex = 0
         var filteredUnchanged = 0
 
-        val result = regions.filter { region ->
+        val result = regions.mapNotNull { region ->
             val translation = region.translation
-            if (translation.isBlank()) { filteredBlank++; return@filter false }
+            if (translation.isBlank()) { filteredBlank++; return@mapNotNull null }
 
-            val sourceLanguage = detectSourceLanguage(region.text).first
+            val sourceLanguage = languageDetector.detect(region.text).language
             if (skipLanguages.isNotEmpty() && sourceLanguage in skipLanguages) {
                 Log.i(TAG, "Filtered out: $translation")
                 Log.i(TAG, "Reason: sourceLanguage=$sourceLanguage in skipLanguages=$skipLanguages")
-                filteredSkipLang++; return@filter false
+                filteredSkipLang++; return@mapNotNull null
             }
 
-            if (sourceLanguage != "UNKNOWN" && sourceLanguage == config.translator.targetLanguage.uppercase()) {
+            if (!config.translator.noTextLangSkip &&
+                sourceLanguage != "UNKNOWN" &&
+                sourceLanguage == config.translator.targetLanguage.uppercase()
+            ) {
                 Log.i(TAG, "Filtered out: $translation")
                 Log.i(TAG, "Reason: sourceLanguage=$sourceLanguage matches targetLanguage")
-                filteredSameLang++; return@filter false
+                filteredSameLang++; return@mapNotNull null
             }
 
             if (config.translator.translator != TranslatorType.NONE) {
                 if (translation.all { it.isDigit() }) {
                     Log.i(TAG, "Filtered out: $translation")
                     Log.i(TAG, "Reason: translation is all digits")
-                    filteredDigits++; return@filter false
+                    filteredDigits++; return@mapNotNull null
                 }
                 if (filterTextRegex != null && filterTextRegex!!.containsMatchIn(translation)) {
                     Log.i(TAG, "Filtered out: $translation")
                     Log.i(TAG, "Reason: matches filterText=${config.filterText}")
-                    filteredRegex++; return@filter false
+                    filteredRegex++; return@mapNotNull null
                 }
                 if (config.translator.translator != TranslatorType.ORIGINAL &&
                     region.text.trim().lowercase() == translation.trim().lowercase()
                 ) {
                     Log.i(TAG, "Filtered out: $translation")
                     Log.i(TAG, "Reason: translation unchanged from source text")
-                    filteredUnchanged++; return@filter false
+                    filteredUnchanged++; return@mapNotNull null
                 }
             }
-            true
-        }.map { region ->
-            val sourceLanguage = detectSourceLanguage(region.text).first
             region.copy(
                 sourceLanguage = if (sourceLanguage == "UNKNOWN") null else sourceLanguage,
                 targetLanguage = config.translator.targetLanguage,
@@ -1346,54 +1435,4 @@ class TranslationPipeline(
 
     private fun String.isAscii(): Boolean = all { it.code < 128 }
 
-}
-
-internal fun detectSourceLanguage(text: String): Pair<String, Float> {
-    if (text.length < 4) return "UNKNOWN" to 0f
-
-    var cjkScore = 0f    // Weight 1.0
-    var hiraganaScore = 0f  // Weight 2.0
-    var katakanaScore = 0f  // Weight 1.5
-    var koreanScore = 0f    // Weight 1.5
-    var arabicScore = 0f    // Weight 1.5
-    var thaiScore = 0f      // Weight 1.5
-    var cyrillicScore = 0f  // Weight 1.5
-    var latinScore = 0f     // Weight 0.5
-
-    for (ch in text) {
-        when {
-            ch in '\u3040'..'\u309f' -> hiraganaScore += 2.0f
-            ch in '\u30a0'..'\u30ff' -> katakanaScore += 1.5f
-            ch in '\uac00'..'\ud7af' || ch in '\u1100'..'\u11ff' -> koreanScore += 1.5f
-            ch in '\u0600'..'\u06ff' || ch in '\u0750'..'\u077f' || ch in '\u08a0'..'\u08ff' -> arabicScore += 1.5f
-            ch in '\u0e00'..'\u0e7f' -> thaiScore += 1.5f  // Thai
-            ch in '\u0400'..'\u04ff' -> cyrillicScore += 1.5f  // Cyrillic (Russian, Ukrainian, etc.)
-            ch.isLetter() && ch.code < 128 -> latinScore += 0.5f
-            ch in '\u3000'..'\u303f' || ch in '\u4e00'..'\u9fff' || ch in '\u3400'..'\u4dbf' || ch in '\uf900'..'\ufaff' -> cjkScore += 1.0f
-        }
-    }
-
-    val scores = mapOf(
-        "JPN" to hiraganaScore * 2 + katakanaScore * 1.5f,
-        "KOR" to koreanScore * 1.5f,
-        "ARA" to arabicScore * 1.5f,
-        "CHS" to cjkScore,
-        "ENG" to latinScore * 0.5f,
-        "THA" to thaiScore * 1.5f,
-        "RUS" to cyrillicScore * 1.5f,
-    )
-    val maxEntry = scores.maxByOrNull { it.value } ?: return "UNKNOWN" to 0f
-    val totalScore = scores.values.sum()
-    val confidence = if (totalScore > 0f) maxEntry.value / totalScore else 0f
-
-    return when {
-        thaiScore > 0 -> "THA" to confidence
-        cyrillicScore > 0 -> "RUS" to confidence  // Simplified: can't distinguish RU/UK
-        hiraganaScore > 0 || (katakanaScore > 0 && hiraganaScore + katakanaScore >= cjkScore) -> "JPN" to confidence
-        koreanScore > 0 -> "KOR" to confidence
-        arabicScore > 0 -> "ARA" to confidence
-        cjkScore > 0 -> "CHS" to confidence
-        latinScore > 0 -> "ENG" to confidence
-        else -> "UNKNOWN" to confidence
-    }
 }

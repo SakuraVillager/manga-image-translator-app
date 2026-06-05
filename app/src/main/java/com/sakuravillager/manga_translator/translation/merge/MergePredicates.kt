@@ -91,6 +91,8 @@ fun quadrilateralCanMergeRegion(
         return false
     }
 
+    // Angle tolerance: 15 degrees converted to radians (matches Python `15 * np.pi / 180`).
+    // Two quads can only merge if their text baseline angles are within this tolerance.
     if (abs(a.angle - b.angle) < 15f * PI.toFloat() / 180f) {
         val fs = minOf(a.fontSize, b.fontSize).coerceAtLeast(1f)
         if (a.polyDistance(b) > fs * charGapTol2) return false

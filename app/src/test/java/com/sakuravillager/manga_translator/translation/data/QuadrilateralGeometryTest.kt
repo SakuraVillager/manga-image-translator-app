@@ -1,6 +1,7 @@
 package com.sakuravillager.manga_translator.translation.data
 
 import android.graphics.PointF
+import com.sakuravillager.manga_translator.translation.pt
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -10,17 +11,9 @@ import org.junit.Test
  *
  * NOTE: Android's mockable jar for unit tests doesn't support
  * PointF(float, float) construction or PointF.equals(). We use reflection
- * to set PointF fields and compare x/y values directly.
+ * (via shared [pt]) to set PointF fields and compare x/y values directly.
  */
 class QuadrilateralGeometryTest {
-
-    /** Creates a PointF with specified coordinates via reflection. */
-    private fun pt(x: Float, y: Float): PointF {
-        val p = PointF()
-        PointF::class.java.getField("x").setFloat(p, x)
-        PointF::class.java.getField("y").setFloat(p, y)
-        return p
-    }
 
     private val squarePoints = listOf(pt(0f, 0f), pt(10f, 0f), pt(10f, 10f), pt(0f, 10f))
     private val square = Quadrilateral(points = squarePoints)
@@ -138,11 +131,12 @@ class QuadrilateralGeometryTest {
     }
 
     @Test
-    fun `test distance AUTO direction touching quads returns near zero`() {
+    fun `test distance AUTO direction touching quads returns zero`() {
         val q2 = Quadrilateral(
             points = listOf(pt(10f, 0f), pt(20f, 0f), pt(20f, 10f), pt(10f, 10f)),
         )
         val dist = square.distance(q2)
+        // Adjacent quads that touch edge-to-edge have min vertex distance = 0
         assertEquals(0f, dist, 0.001f)
     }
 

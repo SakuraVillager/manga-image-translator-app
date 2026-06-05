@@ -3,6 +3,7 @@ package com.sakuravillager.manga_translator.translation.merge
 import android.graphics.PointF
 import com.sakuravillager.manga_translator.translation.data.Quadrilateral
 import com.sakuravillager.manga_translator.translation.data.TextDirection
+import com.sakuravillager.manga_translator.translation.pt
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Test
@@ -16,16 +17,6 @@ import kotlin.math.PI
  * beyond PointF (available via SDK jar).
  */
 class DefaultTextlineMergerTest {
-
-    // ── Helper: create a PointF with specified coordinates via reflection ──
-    // (Android mockable jar doesn't support PointF(float, float))
-
-    private fun pt(x: Float, y: Float): PointF {
-        val p = PointF()
-        PointF::class.java.getField("x").setFloat(p, x)
-        PointF::class.java.getField("y").setFloat(p, y)
-        return p
-    }
 
     // ── Helper: create a Quadrilateral with sorted points ──────────────
 
@@ -256,7 +247,9 @@ class DefaultTextlineMergerTest {
         val merger = DefaultTextlineMerger()
         val result = merger.merge(listOf(q1, q2), 100, 100)
         assertEquals(1, result.size)
-        assertEquals("HelloWorld", result[0].text)
+        // sortForTextBlock with VERTICAL direction sorts by center.x DESCENDING
+        // (right-to-left). q2 (x=6) comes before q1 (x=2) → "WorldHello"
+        assertEquals("WorldHello", result[0].text)
     }
 
     @Test

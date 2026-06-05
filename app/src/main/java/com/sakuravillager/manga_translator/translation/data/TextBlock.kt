@@ -20,12 +20,35 @@ data class TextBlock(
     val lines: List<List<PointF>> = emptyList(),
     val texts: List<String> = emptyList(),
     val text: String = "",
+    /**
+     * The original OCR-recognized text, NEVER modified by pre-dictionary, bracket fixing,
+     * or any pre-processing step. Set once at merge time and preserved through all pipeline stages.
+     *
+     * Used by the renderer for region expansion calculations (matches Python's `text_raw`).
+     * The renderer compares `textRaw.length` vs `translation.length` to decide whether
+     * the text box needs to be scaled.
+     *
+     * Contract:
+     * - Set in [DefaultTextlineMerger.buildTextBlock] from concatenated line texts
+     * - Never overwritten by applyPreDictionary, fixBrackets, or any pre-translation step
+     * - May be null-safe (empty string means no text)
+     */
     val textRaw: String = "",
     val translation: String = "",
     val language: String? = null,
     val sourceLanguage: String? = null,
     val targetLanguage: String? = null,
     val fontSize: Float = 0f,
+    /**
+     * Rotation angle in RADIANS.
+     *
+     * 0 = unrotated (horizontal text), positive = clockwise rotation of the text baseline.
+     * Used by [unrotatedPolygons] and [minRect] for coordinate rotation via `cos(angle)` / `sin(angle)`.
+     *
+     * Note: Python's `TextBlock.angle` is in DEGREES. This Kotlin port uses radians consistently
+     * throughout the pipeline (merger, predicates, renderer). The values are equivalent after
+     * the Python `deg2rad` / `rad2deg` conversions.
+     */
     val angle: Float = 0f,
     val fontFamily: String = "",
     val bold: Boolean = false,
@@ -137,7 +160,7 @@ data class TextBlock(
             line.map { p ->
                 val dx = p.x - cx
                 val dy = p.y - cy
-                PointF(cx + dx * cos - dy * sin, cy + dx * sin + dy * cos)
+                pointF(cx + dx * cos - dy * sin, cy + dx * sin + dy * cos)
             }
         }
     }
@@ -153,25 +176,25 @@ data class TextBlock(
             val cos = cos(angle)
             val sin = sin(angle)
             val corners = listOf(
-                PointF(minX, minY), PointF(maxX, minY),
-                PointF(maxX, maxY), PointF(minX, maxY),
+                pointF(minX, minY), pointF(maxX, minY),
+                pointF(maxX, maxY), pointF(minX, maxY),
             ).map { p ->
                 val dx = p.x - cx; val dy = p.y - cy
-                PointF(cx + dx * cos - dy * sin, cy + dx * sin + dy * cos)
+                pointF(cx + dx * cos - dy * sin, cy + dx * sin + dy * cos)
             }
-            return RectF(
-                corners.minOf { it.x }.coerceAtLeast(0f),
-                corners.minOf { it.y }.coerceAtLeast(0f),
+            return rectF(
+                corners.minOf { it.x },
+                corners.minOf { it.y },
                 corners.maxOf { it.x },
                 corners.maxOf { it.y },
             )
         }
-        return RectF(minX, minY, maxX, maxY)
+        return rectF(minX, minY, maxX, maxY)
     }
 
     val center: PointF get() {
         val r = minRect
-        return PointF(r.centerX(), r.centerY())
+        return pointF((r.left + r.right) / 2f, (r.top + r.bottom) / 2f)
     }
 
     val unrotatedSize: Pair<Float, Float> get() {
@@ -229,10 +252,18 @@ data class TextBlock(
         return ((rgb and 0xFF) shl 16) or (rgb and 0xFF00) or ((rgb shr 16) and 0xFF)
     }
 
+    /**
+     * Computes stroke (outline) width for text rendering.
+     *
+     * Mirrors Python's `stroke_radius = max(0.07 * font_size, 1)` (text_render.py L451).
+     * The width is proportional to font size with a minimum of 1px.
+     *
+     * @return stroke width in pixels, or 0 if fg/bg contrast is too low
+     */
     val strokeWidth: Float get() {
         val (fg, bg) = getFontColors()
         val diff = colorDifference(fg, bg)
-        return if (diff > 15f) defaultStrokeWidth else 0f
+        return if (diff > 15f) computeStrokeWidth(fontSize) else 0f
     }
 
     private fun polygonArea(pts: List<PointF>): Float {
@@ -454,7 +485,46 @@ data class TextBlock(
     private fun isValuableChar(ch: Char): Boolean = TextUtils.isValuableChar(ch)
 
     companion object {
+        /**
+         * Computes stroke width proportional to font size.
+         *
+         * Matches Python `text_render.py L451`: `stroke_radius = max(0.07 * font_size, 1)`.
+         * The result is in pixels. Minimum is 1.0px to ensure stroke visibility
+         * even at small font sizes.
+         */
+        fun computeStrokeWidth(fontSize: Float): Float = maxOf(0.07f * fontSize, 1f)
+
+        @Deprecated("Use computeStrokeWidth(fontSize) instead", ReplaceWith("computeStrokeWidth(fontSize)"))
         const val defaultStrokeWidth: Float = 0.2f
+
+        /**
+         * Creates a [PointF] via direct field assignment.
+         *
+         * The `PointF(Float, Float)` constructor is stubbed (returns (0,0)) in the mockable
+         * Android JAR used for JVM unit tests.  Direct field write works on both JVM and
+         * Android, so tests can verify geometry computations without Robolectric.
+         */
+        fun pointF(x: Float, y: Float): PointF {
+            val p = PointF()
+            p.x = x
+            p.y = y
+            return p
+        }
+
+        /**
+         * Creates a [RectF] via direct field assignment.
+         *
+         * Same rationale as [pointF]: the 4-arg constructor is stubbed in the mockable JAR,
+         * but public field writes always work.
+         */
+        fun rectF(left: Float, top: Float, right: Float, bottom: Float): RectF {
+            val r = RectF()
+            r.left = left
+            r.top = top
+            r.right = right
+            r.bottom = bottom
+            return r
+        }
 
         private val LANGUAGE_ORIENTATION_PRESETS = mapOf(
             "CHS" to TextDirection.AUTO,

@@ -22,25 +22,23 @@ import java.nio.LongBuffer
 import java.util.ArrayDeque
 
 /**
- * Beam-search 48px OCR text recognizer using ONNX encoder + pure-Kotlin AR decoder.
+ * 48px OCR text recognizer using ONNX encoder + ONNX autoregressive decoder (greedy).
  *
  * Pipeline:
  * 1. Download/load the encoder ONNX model (ocr_ar_48px_encoder.onnx)
- * 2. Load decoder weights for BeamSearchDecoder (embedding + transformer layers + pred heads)
+ * 2. Download/load the decoder ONNX model (ocr_ar_48px_decoder.onnx)
  * 3. Perspective-crop each Quadrilateral to 48px height
  * 4. Sort regions by width, batch-pad to uniform width
  * 5. Pixel normalization: (pixel / 127.5f) - 1.0f → NCHW float32 [-1, 1]
  * 6. Encoder ONNX forward → memory + input_mask
- * 7. BeamSearchDecoder.decode(memory, mask, batch) → (tokenIds, probability)
+ * 7. Greedy decode via decoder ONNX step loop → token sequence + colors
  * 8. ArDictionary.decode(tokenIds) → text string
- * 9. ColorExtractor.extract(hiddenState) → CharacterColor
- * 10. Assemble results with original ordering
+ * 9. Assemble results with original ordering
  *
  * Memory-safe design:
  * - Batch size is dynamically adjusted based on region widths to bound
  *   the input tensor allocation.
  * - Uses reusable FloatArray + IntArray buffers instead of per-sample allocations.
- * - Graceful no-op when decoder weights are not yet available.
  */
 class Model48pxBeamRecognizer(
     private val ctx: Context?,
@@ -55,8 +53,7 @@ class Model48pxBeamRecognizer(
     // -- Model components (internal settable for test injection) --
 
     internal var encoderSession: OrtSession? = null
-    internal var beamSearchDecoder: BeamSearchDecoder? = null
-    internal var colorExtractor: ColorExtractor? = null
+    internal var decoderSession: OrtSession? = null
 
     private val env: OrtEnvironment by lazy { OrtEnvironment.getEnvironment() }
 
@@ -87,10 +84,9 @@ class Model48pxBeamRecognizer(
 
     override suspend fun prepare() {
         val context = requireNotNull(ctx) { "Context required for prepare()" }
-        AppLogger.i(TAG, "prepare() — loading encoder ONNX model ...")
+        AppLogger.i(TAG, "prepare() — loading ONNX models ...")
 
         // 1. Load encoder ONNX model
-        //    Use ModelDownloadManager where available; fall back to assets for dev/test.
         val modelFile = if (modelDownloadManager != null) {
             modelDownloadManager.ensureModel(ModelRegistry.OCR_AR_48PX_ENCODER)
         } else {
@@ -113,41 +109,37 @@ class Model48pxBeamRecognizer(
             }
         }
         encoderSession = env.createSession(modelFile.absolutePath, OrtSession.SessionOptions())
-
-        // Log encoder model I/O specs
-        val sess = encoderSession!!
         AppLogger.i(TAG, "Encoder ONNX loaded (${modelFile.length() / 1024} KB)")
-        AppLogger.i(TAG, "Encoder input names: ${sess.inputNames}")
-        AppLogger.i(TAG, "Encoder output names: ${sess.outputNames}")
-        for (name in sess.inputNames) {
-            val info = sess.getInputInfo().getValue(name)
-            AppLogger.i(TAG, "Encoder input '$name': $info")
+
+        // 2. Load decoder ONNX model
+        val decFile = if (modelDownloadManager != null) {
+            modelDownloadManager.ensureModel(ModelRegistry.OCR_AR_48PX_DECODER)
+        } else {
+            File(context.filesDir, "models/ocr_ar_48px_decoder.onnx").also { f ->
+                if (!f.exists()) {
+                    throw java.io.IOException(
+                        "Decoder ONNX model not found at ${f.absolutePath}. " +
+                            "Use ModelDownloadManager or place file manually."
+                    )
+                }
+            }
         }
+        decoderSession = env.createSession(decFile.absolutePath, OrtSession.SessionOptions())
+        AppLogger.i(TAG, "Decoder ONNX loaded (${decFile.length() / 1024 / 1024} MB)")
 
-        // 2. Load decoder weights
-        //    Production: load from serialised weight files exported from Python.
-        //    Fallback: null (recognize() will no-op and return textlines unchanged).
-        beamSearchDecoder = loadDecoderWeights(context)
-        if (beamSearchDecoder == null) {
-            AppLogger.w(TAG, "Decoder weights not available — recognize() will return textlines unchanged")
-        }
-
-        // 3. Initialise color extractor with real weights if available
-        colorExtractor = ColorExtractor.createDefault()
-
-        // 4. Load AR dictionary
+        // 3. Load AR dictionary
         ArDictionary.load(context)
         AppLogger.i(TAG, "prepare() — ArDictionary loaded, size=${ArDictionary.size}")
 
         _isReady = true
-        AppLogger.i(TAG, "prepare() — isReady=$_isReady, decoder=${beamSearchDecoder != null}")
+        AppLogger.i(TAG, "prepare() — isReady=$_isReady")
     }
 
     override suspend fun release() {
         encoderSession?.close()
         encoderSession = null
-        beamSearchDecoder = null
-        colorExtractor = null
+        decoderSession?.close()
+        decoderSession = null
         _isReady = false
         AppLogger.i(TAG, "release() — all components released")
     }
@@ -160,17 +152,13 @@ class Model48pxBeamRecognizer(
         config: OcrConfig,
     ): List<Quadrilateral> {
         // Early return: no textlines or models not fully loaded
-        if (textlines.isEmpty() || encoderSession == null) {
-            AppLogger.i(TAG, "Early return: textlines=${textlines.size}, encoder=${encoderSession != null}")
-            return textlines
-        }
-        if (beamSearchDecoder == null) {
-            AppLogger.w(TAG, "recognize() — decoder not loaded, returning textlines unchanged")
+        if (textlines.isEmpty() || encoderSession == null || decoderSession == null) {
+            AppLogger.i(TAG, "Early return: textlines=${textlines.size}, encoder=${encoderSession != null}, decoder=${decoderSession != null}")
             return textlines
         }
 
         val sess = encoderSession!!
-        val decoder = beamSearchDecoder!!
+        val decSess = decoderSession!!
         AppLogger.i(TAG, "recognize() — regions=${textlines.size}, img=${bitmap.width}x${bitmap.height}")
 
         // 1. Generate text directions (connected-component grouping)
@@ -305,18 +293,127 @@ class Model48pxBeamRecognizer(
                     maskTensor.byteBuffer.get(maskBytes)
                     val maskArray = BooleanArray(maskSize) { i -> maskBytes[i] != 0.toByte() }
 
-                    // 5. Beam search decode
-                    val decodedResults = decoder.decode(memoryArray, maskArray, N)
+                    // 5. Greedy decode via ONNX decoder step loop
+                    val dictSize = ArDictionary.size
+                    val maxSeq = 255
+                    val cacheSize = N * 6 * maxSeq * 320  // N*(N_DECODERS+1)*MAX_SEQ*EMB_DIM
+                    val cacheFlat = FloatArray(cacheSize)
+                    var currentTokens = LongArray(N) { ArDictionary.START.toLong() }
+
+                    // Per-sample results
+                    val sampleTokens = Array(N) { mutableListOf<Int>() }
+                    val sampleFinished = BooleanArray(N)
+                    val sampleLastFgColors = Array(N) { FloatArray(3) }
+                    val sampleLastBgColors = Array(N) { FloatArray(3) }
+                    val sampleLastFgInd = Array(N) { FloatArray(2) }
+                    val sampleLastBgInd = Array(N) { FloatArray(2) }
+
+                    for (step in 0 until maxSeq) {
+                        // Build decoder input tensors
+                        val tokenBuf = LongBuffer.wrap(currentTokens)
+                        val stepBuf = LongBuffer.wrap(longArrayOf(step.toLong()))
+                        val memBuf = FloatBuffer.wrap(memoryArray)
+                        val maskBuf = ByteBuffer.allocate(maskArray.size).apply {
+                            for (b in maskArray) put(if (b) 1.toByte() else 0.toByte())
+                            flip()
+                        }
+                        val cacheBuf = FloatBuffer.wrap(cacheFlat)
+
+                        OnnxTensor.createTensor(env, tokenBuf, longArrayOf(N.toLong())).use { tokT ->
+                            OnnxTensor.createTensor(env, stepBuf, longArrayOf()).use { stepT ->
+                                OnnxTensor.createTensor(env, memBuf, longArrayOf(N.toLong(), memLen.toLong(), dim.toLong())).use { memT ->
+                                    OnnxTensor.createTensor(env, maskBuf, longArrayOf(N.toLong(), memLen.toLong())).use { maskT ->
+                                        OnnxTensor.createTensor(env, cacheBuf, longArrayOf((N * 6).toLong(), maxSeq.toLong(), 320L)).use { cacheT ->
+                                            val decInputs = mapOf(
+                                                "token_ids" to tokT,
+                                                "step" to stepT,
+                                                "memory" to memT,
+                                                "memory_mask" to maskT,
+                                                "cache_flat" to cacheT,
+                                            )
+                                            val decOutputs = decSess.run(decInputs)
+                                            try {
+                                                val logitsTensor = decOutputs.get(0) as OnnxTensor
+                                                val fgColorsTensor = decOutputs.get(1) as OnnxTensor
+                                                val bgColorsTensor = decOutputs.get(2) as OnnxTensor
+                                                val fgIndTensor = decOutputs.get(3) as OnnxTensor
+                                                val bgIndTensor = decOutputs.get(4) as OnnxTensor
+                                                val newCacheTensor = decOutputs.get(5) as OnnxTensor
+
+                                                // Read logits and find argmax per sample
+                                                val logitsBuf = logitsTensor.floatBuffer
+                                                val nextTokens = LongArray(N)
+                                                for (n in 0 until N) {
+                                                    if (sampleFinished[n]) {
+                                                        nextTokens[n] = ArDictionary.PAD.toLong()
+                                                        continue
+                                                    }
+                                                    var bestIdx = 0
+                                                    var bestVal = Float.NEGATIVE_INFINITY
+                                                    for (v in 0 until dictSize) {
+                                                        val logit = logitsBuf.get(n * dictSize + v)
+                                                        if (logit > bestVal) {
+                                                            bestVal = logit
+                                                            bestIdx = v
+                                                        }
+                                                    }
+                                                    sampleTokens[n].add(bestIdx)
+                                                    // Store color predictions for this step
+                                                    val fgBuf = fgColorsTensor.floatBuffer
+                                                    val bgBuf = bgColorsTensor.floatBuffer
+                                                    val fgIBuf = fgIndTensor.floatBuffer
+                                                    val bgIBuf = bgIndTensor.floatBuffer
+                                                    for (c in 0..2) {
+                                                        sampleLastFgColors[n][c] = fgBuf.get(n * 3 + c)
+                                                        sampleLastBgColors[n][c] = bgBuf.get(n * 3 + c)
+                                                    }
+                                                    for (c in 0..1) {
+                                                        sampleLastFgInd[n][c] = fgIBuf.get(n * 2 + c)
+                                                        sampleLastBgInd[n][c] = bgIBuf.get(n * 2 + c)
+                                                    }
+                                                    if (bestIdx == ArDictionary.END) {
+                                                        sampleFinished[n] = true
+                                                    }
+                                                    nextTokens[n] = bestIdx.toLong()
+                                                }
+
+                                                // Update cache from output
+                                                val newCacheBuf = newCacheTensor.floatBuffer
+                                                newCacheBuf.get(cacheFlat)
+                                                currentTokens = nextTokens
+                                            } finally {
+                                                decOutputs.close()
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Check if all samples finished
+                        if (sampleFinished.all { it }) break
+                    }
 
                     // 6. Process results: decode text + extract colors
                     for (localIdx in 0 until N) {
-                        val (tokens, probability) = decodedResults[localIdx]
-                        val text = ArDictionary.decode(tokens.toList())
+                        // Remove END token from sequence
+                        val rawTokens = sampleTokens[localIdx].toIntArray()
+                        val tokens = rawTokens.filter { it != ArDictionary.END && it != ArDictionary.START }
+                        val text = ArDictionary.decode(tokens)
 
-                        // Color extraction with mock weights (real weights TBD)
-                        val lastHidden = FloatArray(320) // placeholder until decoder exposes hidden states
-                        val color = colorExtractor?.extract(lastHidden)
-                            ?: CharacterColor(intArrayOf(0, 0, 0), intArrayOf(255, 255, 255), false, false)
+                        // Compute simple probability from sequence length (greedy: all tokens are argmax)
+                        val probability = if (tokens.isNotEmpty()) 1.0f / (tokens.size + 1) else 0f
+
+                        // Convert color predictions from ONNX decoder
+                        val fgC = sampleLastFgColors[localIdx]
+                        val bgC = sampleLastBgColors[localIdx]
+                        val fgI = sampleLastFgInd[localIdx]
+                        val bgI = sampleLastBgInd[localIdx]
+                        val fgRgb = IntArray(3) { (fgC[it] * 255f).toInt().coerceIn(0, 255) }
+                        val bgRgb = IntArray(3) { (bgC[it] * 255f).toInt().coerceIn(0, 255) }
+                        val hasFg = fgI[1] > fgI[0]
+                        val hasBg = bgI[1] > bgI[0]
+                        val color = CharacterColor(fgRgb, bgRgb, hasFg, hasBg)
 
                         val groupedIndex = batchIndices[localIdx]
                         val originalIndex = grouped[groupedIndex].first
@@ -338,14 +435,14 @@ class Model48pxBeamRecognizer(
                         if (text.isBlank()) {
                             Log.d(TAG, "region#$originalIndex decoded as blank")
                         } else {
-                            Log.d(TAG, "region#$originalIndex text='$text' prob=${"%.4f".format(probability)}")
+                            Log.d(TAG, "region#$originalIndex text='$text' tokens=${tokens.size}")
                         }
 
                         // Debug token trace
                         if (config.debugSaveTokens && debugRoot != null) {
                             val tokenFile = File(debugRoot, "region_${originalIndex}_tokens.txt")
                             try {
-                                tokenFile.writeText(tokens.joinToString("\n"))
+                                tokenFile.writeText(rawTokens.joinToString("\n"))
                             } catch (e: Exception) {
                                 Log.w(TAG, "Failed to write token file: ${e.message}")
                             }
@@ -362,113 +459,6 @@ class Model48pxBeamRecognizer(
         val nonBlankCount = refined.count { it.text.isNotBlank() }
         AppLogger.i(TAG, "Done: ${refined.size} regions, nonBlank=$nonBlankCount")
         return refined
-    }
-
-    // ── Decoder weight loading ─────────────────────────────────────────
-
-    /**
-     * Loads decoder weights from serialised files.
-     *
-     * Expected files in [context.filesDir]/models/decoder/:
-     *   - embedding.bin     : [dictSize × dim] float32
-     *   - layer_{i}_*.bin   : per-layer weights
-     *   - pred1_weight.bin  : Linear(320→320) + pred1_bias.bin
-     *   - pred_weight.bin   : Linear(320→dictSize) + pred_bias.bin
-     *
-     * Returns null when weight files are not yet available (graceful no-op).
-     */
-    private fun loadDecoderWeights(context: Context): BeamSearchDecoder? {
-        val decoderDir = File(context.filesDir, "models/decoder")
-        if (!decoderDir.exists()) {
-            AppLogger.w(TAG, "Decoder weights directory not found: ${decoderDir.absolutePath}")
-            return null
-        }
-
-        return try {
-            val dictSize = ArDictionary.size
-            val dim = 320
-            val numLayers = 5
-            val ffDim = 2048
-
-            // Load embedding [dictSize × dim]
-            val embedding = loadFloatArray(File(decoderDir, "embedding.bin"), dictSize * dim)
-
-            // Load per-layer weights
-            val layerWeights = mutableListOf<DecoderLayerWeights>()
-            for (i in 0 until numLayers) {
-                layerWeights.add(loadDecoderLayerWeights(decoderDir, i, dim, ffDim))
-            }
-
-            // Load prediction heads
-            val pred1Weight = loadFloatArray(File(decoderDir, "pred1_weight.bin"), dim * dim)
-            val pred1Bias = loadFloatArray(File(decoderDir, "pred1_bias.bin"), dim)
-            val predWeight = loadFloatArray(File(decoderDir, "pred_weight.bin"), dim * dictSize)
-            val predBias = loadFloatArray(File(decoderDir, "pred_bias.bin"), dictSize)
-
-            BeamSearchDecoder(
-                embedding = embedding,
-                decoderLayerWeights = layerWeights,
-                pred1Weights = LinearWeights(pred1Weight, pred1Bias),
-                predWeights = LinearWeights(predWeight, predBias),
-                dim = dim,
-                numHeads = 4,
-                ffDim = ffDim,
-                dictSize = dictSize,
-                numLayers = numLayers,
-                maxSeqLength = 384,
-                beamK = 5,
-                startTok = ArDictionary.START,
-                endTok = ArDictionary.END,
-                padTok = ArDictionary.PAD,
-                maxFinishedHypos = 2,
-            ).also {
-                AppLogger.i(TAG, "Decoder weights loaded successfully: " +
-                    "dictSize=$dictSize, dim=$dim, numLayers=$numLayers")
-            }
-        } catch (e: Exception) {
-            AppLogger.w(TAG, "Failed to load decoder weights: ${e.message}")
-            null
-        }
-    }
-
-    private fun loadDecoderLayerWeights(dir: File, layerIdx: Int, dim: Int, ffDim: Int): DecoderLayerWeights {
-        val prefix = "layer_${layerIdx}_"
-
-        fun load(name: String, size: Int): FloatArray = loadFloatArray(File(dir, "$prefix$name"), size)
-        fun loadLinear(name: String, inDim: Int, outDim: Int): LinearWeights = LinearWeights(
-            weight = load("${name}_weight.bin", inDim * outDim),
-            bias = load("${name}_bias.bin", outDim),
-        )
-        fun loadLN(name: String, d: Int): LayerNormWeights = LayerNormWeights(
-            weight = load("${name}_weight.bin", d),
-            bias = load("${name}_bias.bin", d),
-        )
-
-        return DecoderLayerWeights(
-            selfAttnQProj = loadLinear("self_attn_q_proj", dim, dim),
-            selfAttnKProj = loadLinear("self_attn_k_proj", dim, dim),
-            selfAttnVProj = loadLinear("self_attn_v_proj", dim, dim),
-            selfAttnOutProj = loadLinear("self_attn_out_proj", dim, dim),
-            crossAttnQProj = loadLinear("cross_attn_q_proj", dim, dim),
-            crossAttnKProj = loadLinear("cross_attn_k_proj", dim, dim),
-            crossAttnVProj = loadLinear("cross_attn_v_proj", dim, dim),
-            crossAttnOutProj = loadLinear("cross_attn_out_proj", dim, dim),
-            norm1 = loadLN("norm1", dim),
-            norm2 = loadLN("norm2", dim),
-            norm3 = loadLN("norm3", dim),
-            ffLinear1 = loadLinear("ff_linear1", dim, ffDim),
-            ffLinear2 = loadLinear("ff_linear2", ffDim, dim),
-        )
-    }
-
-    private fun loadFloatArray(file: File, expectedSize: Int): FloatArray {
-        val bytes = file.readBytes()
-        require(bytes.size == expectedSize * 4) {
-            "File ${file.name}: expected ${expectedSize * 4} bytes, got ${bytes.size}"
-        }
-        val result = FloatArray(expectedSize)
-        ByteBuffer.wrap(bytes).asFloatBuffer().get(result)
-        return result
     }
 
     // ── Text direction grouping ────────────────────────────────────────

@@ -125,6 +125,13 @@ class Model48pxTextRecognizer(
         }
         val sess = session!!
         AppLogger.i(TAG, "[OCR-IMPL] Start: regions=${textlines.size}, engine=${config.ocrEngine}, img=${bitmap.width}x${bitmap.height}")
+        // Memory pre-check
+        val runtime = Runtime.getRuntime()
+        val totalMB = runtime.totalMemory() / (1024 * 1024)
+        val freeMB = runtime.freeMemory() / (1024 * 1024)
+        val usedMB = totalMB - freeMB
+        val maxMB = runtime.maxMemory() / (1024 * 1024)
+        AppLogger.i(TAG, "[OCR-IMPL] Memory pre-check: JVM used=${usedMB}MB, free=${freeMB}MB, max=${maxMB}MB, textlines=${textlines.size}, img=${bitmap.width}x${bitmap.height}")
         Log.d(TAG, "recognize() start: regions=${textlines.size}, engine=${config.ocrEngine}")
 
         // 1. Mirror Python's _generate_text_direction(): build components first,
@@ -150,8 +157,13 @@ class Model48pxTextRecognizer(
                 TextDirection.VERTICAL -> TextDirection.VERTICAL
                 TextDirection.HORIZONTAL_RTL, TextDirection.HORIZONTAL, TextDirection.AUTO -> TextDirection.HORIZONTAL
             }
-            val crop = quad.getTransformedRegion(bitmap, cropDirection, TEXT_HEIGHT, debugRoot)
-                ?: Bitmap.createBitmap(1, TEXT_HEIGHT, Bitmap.Config.ARGB_8888)
+            val crop = try {
+                quad.getTransformedRegion(bitmap, cropDirection, TEXT_HEIGHT, debugRoot)
+                    ?: Bitmap.createBitmap(1, TEXT_HEIGHT, Bitmap.Config.ARGB_8888)
+            } catch (e: Exception) {
+                AppLogger.e(TAG, "[OCR-IMPL] Crop extraction failed for region $origIdx: ${e.message}", e)
+                Bitmap.createBitmap(1, TEXT_HEIGHT, Bitmap.Config.ARGB_8888)
+            }
             if (gi < 3) {
                 AppLogger.i(TAG, "[OCR-IMPL] crop[$origIdx]: groupDir=${direction} cropDir=${cropDirection} cropSize=${crop.width}x${crop.height}")
             }
@@ -215,7 +227,8 @@ class Model48pxTextRecognizer(
             // Without this, the ResNet backbone output is too narrow for the Transformer encoder.
             val maxW = 4 * ((widths.maxOrNull() ?: 1) + 7) / 4 + 128
 
-            // 2b. Build input tensor: [N, 3, 48, maxW], float32, normalized to [-1, 1]
+            // 2b. Build input tensor and run inference (with error protection)
+            try {
             val tensorSize = N * 3 * TEXT_HEIGHT * maxW
             val floatBuf = FloatBuffer.allocate(tensorSize)
             val pixelBuf = IntArray(TEXT_HEIGHT * maxW)
@@ -351,6 +364,27 @@ class Model48pxTextRecognizer(
                 }
                 outputs.close()
             }
+            } catch (e: Exception) {
+                AppLogger.e(TAG, "[OCR-IMPL] Batch inference failed at batchStart=$batchStart: ${e.message}", e)
+                // Mark all regions in this batch as blank
+                for (localIdx in batchStart until batchEnd) {
+                    val originalIndex = grouped[sortedIndices[localIdx]].first
+                    results[originalIndex] = results[originalIndex].copy(
+                        text = "",
+                        fgColor = (0xFF shl 24) or (0x00 shl 16) or (0x00 shl 8) or 0x00,
+                        bgColor = (0xFF shl 24) or (0xFF shl 16) or (0xFF shl 8) or 0xFF,
+                    )
+                }
+            }
+
+            // Periodic memory diagnostics
+            if (batchEnd % 5 == 0 || batchEnd == sortedIndices.size) {
+                val rt = Runtime.getRuntime()
+                val uMB = (rt.totalMemory() - rt.freeMemory()) / (1024 * 1024)
+                val mMB = rt.maxMemory() / (1024 * 1024)
+                AppLogger.i(TAG, "[OCR-IMPL] Progress: batch $batchEnd/${sortedIndices.size}, JVM used=${uMB}MB, max=${mMB}MB")
+            }
+
             batchStart = batchEnd
         }
 

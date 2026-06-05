@@ -1,6 +1,7 @@
 package com.sakuravillager.manga_translator.translation.util
 
 import android.graphics.PointF
+import com.sakuravillager.manga_translator.translation.pt
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -15,13 +16,6 @@ import kotlin.math.sqrt as ksqrt
 class GeometryUtilsTest {
 
     // ── polygonDistance ────────────────────────────────────────────────
-
-    private fun pt(x: Float, y: Float): PointF {
-        val p = PointF()
-        PointF::class.java.getField("x").setFloat(p, x)
-        PointF::class.java.getField("y").setFloat(p, y)
-        return p
-    }
 
     @Test
     fun `polygonDistance separated squares returns positive distance`() {

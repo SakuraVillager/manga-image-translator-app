@@ -80,20 +80,37 @@ open class LamaMPEInpainter(
         } else {
             1f
         }
-        val procW = (srcW * scale).toInt().coerceAtLeast(1)
-        val procH = (srcH * scale).toInt().coerceAtLeast(1)
+        // Scale down if needed
+        val scaledW = (srcW * scale).toInt().coerceAtLeast(1)
+        val scaledH = (srcH * scale).toInt().coerceAtLeast(1)
 
-        Log.d(logTag, "inpaint(${srcW}x${srcH}) → scale=$scale → (${procW}x${procH})")
+        // Pad to multiple of 8 (matches Python pad_size=8 in inpainting_lama_mpe.py L67-79)
+        val padSize = 8
+        val procW = if (scaledW % padSize != 0) scaledW + (padSize - scaledW % padSize) else scaledW
+        val procH = if (scaledH % padSize != 0) scaledH + (padSize - scaledH % padSize) else scaledH
+        val needsPad = procW != scaledW || procH != scaledH
 
-        val workingBitmap = if (scale < 1f) {
-            Bitmap.createScaledBitmap(bitmap, procW, procH, true)
+        Log.d(logTag, "inpaint(${srcW}x${srcH}) → scale=$scale → (${scaledW}x${scaledH}) → pad → (${procW}x${procH})")
+
+        val scaledBitmap = if (scale < 1f) {
+            Bitmap.createScaledBitmap(bitmap, scaledW, scaledH, true)
         } else {
             bitmap
         }
-        val workingMask = if (scale < 1f) {
-            Bitmap.createScaledBitmap(alignedMask, procW, procH, true)
+        val scaledMask = if (scale < 1f) {
+            Bitmap.createScaledBitmap(alignedMask, scaledW, scaledH, true)
         } else {
             alignedMask
+        }
+        val workingBitmap = if (needsPad) {
+            Bitmap.createScaledBitmap(scaledBitmap, procW, procH, true)
+        } else {
+            scaledBitmap
+        }
+        val workingMask = if (needsPad) {
+            Bitmap.createScaledBitmap(scaledMask, procW, procH, true)
+        } else {
+            scaledMask
         }
 
         val toRecycle = mutableListOf<Bitmap>()
@@ -179,10 +196,11 @@ open class LamaMPEInpainter(
                     val resPixels = IntArray(srcW * srcH)
                     resultAtOrigSize.getPixels(resPixels, 0, srcW, 0, 0, srcW, srcH)
 
+                    // Hard binary compositing (matches Python L117: ans = inpainted * mask + original * (1-mask))
                     val finalPixels = IntArray(srcW * srcH)
                     for (i in 0 until srcW * srcH) {
                         val maskVal = (alignedMaskPixels[i] shr 16) and 0xFF
-                        finalPixels[i] = if (maskVal > 127) resPixels[i] else origPixels[i]
+                        finalPixels[i] = if (maskVal >= 127) resPixels[i] else origPixels[i]
                     }
 
                     val finalBitmap = Bitmap.createBitmap(srcW, srcH, Bitmap.Config.ARGB_8888)
@@ -200,9 +218,13 @@ open class LamaMPEInpainter(
                 inputTensor.close()
             }
         } finally {
+            if (needsPad) {
+                if (workingBitmap !== scaledBitmap) workingBitmap.recycle()
+                if (workingMask !== scaledMask) workingMask.recycle()
+            }
             if (scale < 1f) {
-                workingBitmap.recycle()
-                workingMask.recycle()
+                scaledBitmap.recycle()
+                scaledMask.recycle()
             }
             if (alignedMask !== mask) {
                 alignedMask.recycle()

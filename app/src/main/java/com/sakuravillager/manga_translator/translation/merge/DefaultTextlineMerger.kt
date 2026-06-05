@@ -88,9 +88,11 @@ class DefaultTextlineMerger : TextlineMerger {
         // Font size = minimum of all quads in the region
         val fontSize = sorted.minOf { it.fontSize }
 
-        // Angle = average quad angle - 90° (converts quad angle to text baseline)
+        // Angle = average quad angle - PI/2 radians (converts quad orientation angle to text baseline angle).
+        // Quad angle 0 = horizontal → baseline angle 0 - PI/2 = -PI/2 (vertical text baseline).
+        // Subtraction aligns the convention so that horizontal text has angle ≈ 0.
         val angle = (sorted.map { it.angle }.average()).toFloat() - (PI / 2.0).toFloat()
-        // Snap near-zero angles to zero
+        // Snap near-zero angles to zero (within 3 degrees)
         val finalAngle = if (abs(angle) < (3f * PI.toFloat() / 180f)) 0f else angle
 
         // Probability = area-weighted geometric mean of quad probabilities
@@ -132,6 +134,8 @@ class DefaultTextlineMerger : TextlineMerger {
             lines = sorted.map { it.points },
             texts = texts,
             text = text,
+            // textRaw preserves original OCR text for renderer expansion calculations.
+            // text may be modified by pre-dict/brackets later; textRaw stays original.
             textRaw = text,
             fontSize = fontSize,
             angle = finalAngle,

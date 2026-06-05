@@ -35,6 +35,7 @@ data class Quadrilateral(
     val direction: TextDirection
         get() {
             if (_direction != TextDirection.AUTO) return _direction
+            if (points.size != 4) return TextDirection.AUTO
             val (_, isVertical) = sortPoints(points)
             return if (isVertical) TextDirection.VERTICAL else TextDirection.HORIZONTAL
         }
@@ -183,7 +184,7 @@ data class Quadrilateral(
     fun distance(other: Quadrilateral, rho: Float = 0.5f): Float {
         if (points.size < 4 || other.points.size < 4) return Float.MAX_VALUE
 
-        return if (direction == TextDirection.AUTO) {
+        return if (_direction == TextDirection.AUTO) {
             var minDistSq = Float.MAX_VALUE
             for (p1 in points) {
                 for (p2 in other.points) {

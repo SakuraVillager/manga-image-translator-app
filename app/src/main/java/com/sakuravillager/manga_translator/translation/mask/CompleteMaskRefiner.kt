@@ -23,19 +23,32 @@ import kotlin.math.sqrt
 /**
  * OpenCV-based mask refiner implementing the `complete_mask` algorithm.
  *
- * This is a CRF-free alternative designed for Android, using OpenCV operations
- * instead of pydensecrf:
- *  - Connected components analysis ([Imgproc.connectedComponentsWithStats]) to
- *    isolate individual text‑region blobs.
- *  - Nearest‑neighbour matching to associate each component with a text line.
- *  - Bilateral filtering on the source image as a lightweight edge‑preserving
- *    pre‑process (CRF alternative).
- *  - Morphological closing + dilation to refine and expand the mask for each
- *    associated component.
+ * ## Algorithm (Python text_mask_utils.py reference)
+ * 1. **Scale down** the mask if it's large relative to the image (for performance).
+ * 2. **Binarise** the raw mask (threshold at 127/255).
+ * 3. **Draw** white-filled text bounding boxes on the mask.
+ * 4. **Draw** 1px black outlines to separate touching regions.
+ * 5. **Connected components analysis** (OpenCV `connectedComponentsWithStats`) to isolate blobs.
+ * 6. **Associate** each CC with the nearest text line (by overlap ratio, centroid distance).
+ * 7. **Bilateral filter** on the source image as edge-preserving preprocessing (CRF alternative).
+ * 8. **Morphological close** + **Otsu threshold** per region for local mask refinement.
+ * 9. **Dilate** to expand coverage.
+ * 10. Optional **bubble filtering** (if `ignoreBubble` is set).
  *
- * The algorithm mirrors the Python `complete_mask()` from `text_mask_utils.py`
- * of the original manga‑image‑translator project, adapted for the Android
- * OpenCV API (no JNI / pydensecrf dependency).
+ * ## Differences from Python reference
+ * | Python (pydensecrf) | Kotlin (CompleteMaskRefiner) |
+ * |----------------------|------------------------------|
+ * | pydensecrf (Dense CRF) for edge refinement | Bilateral filter + Otsu thresholding |
+ * | felzenszwalb superpixel segmentation | Connected components analysis |
+ * | CRF produces smoother mask edges | Slightly rougher edges, but sufficient for LAMA/SDD inpainting |
+ * | Requires compiled C extension | Pure OpenCV — runs on Android |
+ *
+ * ## Parameter tuning
+ * - `bilateralFilter(d=17, sigmaColor=80, sigmaSpace=80)`: controls edge preservation strength.
+ *   Increase for smoother masks; decrease for sharper edges.
+ * - Morphological close kernel: `textSize * 0.3` — proportional to text size.
+ *
+ * @see com.sakuravillager.manga_translator.translation.api.MaskRefiner
  */
 class CompleteMaskRefiner : MaskRefiner {
 
@@ -215,12 +228,12 @@ class CompleteMaskRefiner : MaskRefiner {
                         bestOverlapIdx = tlIdx
                     }
 
-                    // Euclidean distance between centroids
-                    val tlcx = tr.centerX().toDouble()
-                    val tlcy = tr.centerY().toDouble()
-                    val dx = centroidX - tlcx
-                    val dy = centroidY - tlcy
-                    val d = sqrt(dx * dx + dy * dy)
+                    // Minimum distance from textline rect boundary to CC centroid
+                    // (approximates Shapely Polygon.distance(centroid): 0 if inside,
+                    // Euclidean distance to nearest edge/corner if outside)
+                    val dxr = maxOf(tr.left.toDouble() - centroidX, 0.0, centroidX - tr.right.toDouble())
+                    val dyr = maxOf(tr.top.toDouble() - centroidY, 0.0, centroidY - tr.bottom.toDouble())
+                    val d = sqrt(dxr * dxr + dyr * dyr)
                     if (d < bestDist) {
                         bestDist = d
                         bestDistIdx = tlIdx
@@ -228,13 +241,18 @@ class CompleteMaskRefiner : MaskRefiner {
                 }
 
                 // --- Decide whether to keep this CC --------------------
+                // Python text_mask_utils.py L130-134: area filter BEFORE distance fallback
+                val bestOverlapArea = textLines[bestOverlapIdx].boundingRect.width().toDouble() *
+                        textLines[bestOverlapIdx].boundingRect.height().toDouble()
+                if (area >= bestOverlapArea) continue // large CC → skip (background region)
+
                 val avgIdx: Int
                 if (bestOverlap <= keepThreshold) {
-                    // No significant overlap — fall back to nearest neighbour
-                    val fontSize = textLines[bestDistIdx].fontSize
+                    // No significant overlap — fall back to nearest by distance
+                    avgIdx = bestDistIdx
+                    val fontSize = textLines[avgIdx].fontSize
                     val unit = maxOf(minOf(fontSize, w1.toFloat(), h1.toFloat()), 10f)
                     if (bestDist >= 0.5 * unit) continue // too far
-                    avgIdx = bestDistIdx
                 } else {
                     avgIdx = bestOverlapIdx
                 }
@@ -279,7 +297,12 @@ class CompleteMaskRefiner : MaskRefiner {
             }
 
             // --- Step 7: Bilateral filter on source image (CRF alt.) ---
-            val imgMat = bitmapToMat(bitmap).also { ownedMats.add(it) }
+            // CRITICAL: Use procBitmap (resized) NOT bitmap (original).
+            // CC coordinates are in procBitmap space; using full-size bitmap would
+            // cause Otsu channel extraction to sample pixels at wrong positions,
+            // completely breaking per-CC boundary refinement (Python text_mask_utils.py
+            // L169 applies bilateralFilter to the resized img, not the original).
+            val imgMat = bitmapToMat(procBitmap).also { ownedMats.add(it) }
             val imgGray = Mat().also { ownedMats.add(it) }
             val imgGrayFiltered = Mat().also { ownedMats.add(it) }
             Imgproc.cvtColor(imgMat, imgGray, Imgproc.COLOR_RGBA2GRAY)
@@ -414,7 +437,7 @@ class CompleteMaskRefiner : MaskRefiner {
                         ),
                     ),
                 )
-                if (BubbleDetector.isIgnore(testBlock, bitmap, ignoreBubble)) {
+                if (BubbleDetector.isIgnore(testBlock, procBitmap, ignoreBubble)) {
                     Imgproc.drawContours(
                         finalMask, listOf(contour), -1,
                         Scalar.all(0.0), Imgproc.FILLED,

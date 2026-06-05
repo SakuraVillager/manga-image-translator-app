@@ -23,7 +23,8 @@ data class LetterboxResult(
 
 /**
  * Scales [bitmap] to fit within a [targetSize]×[targetSize] square while preserving aspect ratio,
- * then centers it on a black background canvas.
+ * then places it at the top-left corner on a black background canvas.
+ * Padding is applied to the right and bottom only (matching Python CTD letterbox).
  *
  * The [stride] parameter is reserved for alignment padding requirements (e.g. model input stride).
  *
@@ -45,9 +46,7 @@ fun letterbox(bitmap: Bitmap, targetSize: Int, stride: Int = 64): LetterboxResul
 
     val canvas = Canvas(result)
     canvas.drawColor(Color.BLACK)
-    val left = (targetSize - newWidth) / 2f
-    val top = (targetSize - newHeight) / 2f
-    canvas.drawBitmap(scaled, left, top, null)
+    canvas.drawBitmap(scaled, 0f, 0f, null)  // top-left aligned, padding on right/bottom
     scaled.recycle()
 
     val dw = targetSize - newWidth
