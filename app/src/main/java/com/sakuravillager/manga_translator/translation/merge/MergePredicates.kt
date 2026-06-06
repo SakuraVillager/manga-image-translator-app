@@ -11,10 +11,10 @@ import kotlin.math.abs
  */
 private const val DEFAULT_RATIO = 1.9f
 private const val DEFAULT_DISCARD_CONNECTION_GAP = 2.0f
-private const val DEFAULT_CHAR_GAP_TOLERANCE = 0.6f
-private const val DEFAULT_CHAR_GAP_TOL2 = 1.5f
-private const val DEFAULT_FONT_SIZE_RATIO_TOL = 1.5f
-private const val DEFAULT_ASPECT_RATIO_TOL = 2.0f
+private const val DEFAULT_CHAR_GAP_TOLERANCE = 1f      // was 0.6f → Python L134: char_gap_tolerance=1
+private const val DEFAULT_CHAR_GAP_TOL2 = 3f            // was 1.5f → Python L135: char_gap_tolerance2=3
+private const val DEFAULT_FONT_SIZE_RATIO_TOL = 2f      // was 1.5f → Python L134: font_size_ratio_tol=2
+private const val DEFAULT_ASPECT_RATIO_TOL = 1.3f       // was 2.0f → Python L134: aspect_ratio_tol=1.3
 
 /**
  * Determines whether two quadrilaterals can be merged into the same text region.

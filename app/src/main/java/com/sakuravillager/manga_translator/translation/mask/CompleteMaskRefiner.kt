@@ -16,6 +16,10 @@ import org.opencv.core.Point
 import org.opencv.core.Scalar
 import org.opencv.core.Size
 import org.opencv.imgproc.Imgproc
+import android.os.Environment
+import com.sakuravillager.manga_translator.MangaTranslatorApp
+import java.io.File
+import java.io.FileOutputStream
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sqrt
@@ -30,8 +34,9 @@ import kotlin.math.sqrt
  * 4. **Draw** 1px black outlines to separate touching regions.
  * 5. **Connected components analysis** (OpenCV `connectedComponentsWithStats`) to isolate blobs.
  * 6. **Associate** each CC with the nearest text line (by overlap ratio, centroid distance).
- * 7. **Bilateral filter** on the source image as edge-preserving preprocessing (CRF alternative).
- * 8. **Morphological close** + **Otsu threshold** per region for local mask refinement.
+ * 7. **Bilateral filter** on the source image as edge-preserving preprocessing.
+ * 8. **Color-guided mask expansion** per region (DenseCRF approximation):
+ *    dilate seed mask → compute mean text color → expand to border pixels with similar color.
  * 9. **Dilate** to expand coverage.
  * 10. Optional **bubble filtering** (if `ignoreBubble` is set).
  *
@@ -45,8 +50,7 @@ import kotlin.math.sqrt
  *
  * ## Parameter tuning
  * - `bilateralFilter(d=17, sigmaColor=80, sigmaSpace=80)`: controls edge preservation strength.
- *   Increase for smoother masks; decrease for sharper edges.
- * - Morphological close kernel: `textSize * 0.3` — proportional to text size.
+ * - Color-guided expansion: `borderWidth=5`, `colorThresh=50` — approximates DenseCRF (sxy=23, srgb=7).
  *
  * @see com.sakuravillager.manga_translator.translation.api.MaskRefiner
  */
@@ -144,19 +148,10 @@ class CompleteMaskRefiner : MaskRefiner {
                 return if (procScale < 1f) Bitmap.createScaledBitmap(bmp, bitmap.width, bitmap.height, true).also { bmp.recycle() } else bmp
             }
 
-            // --- Step 3: Draw filled white text bboxes on the mask --------
-            for (tl in textLines) {
-                val r = tl.boundingRect
-                Imgproc.rectangle(
-                    maskMat,
-                    Point(r.left.toDouble(), r.top.toDouble()),
-                    Point(r.right.toDouble(), r.bottom.toDouble()),
-                    Scalar.all(255.0),
-                    Imgproc.FILLED,
-                )
-            }
-
-            // --- Step 4: 1px black outlines to separate touching regions --
+            // --- Step 3: 1px black outlines to separate touching regions --
+            // Matches Python text_mask_utils.py L99-100: only outlines, NO white fill.
+            // White fill was removed because it expands mask beyond CTD-detected
+            // regions, causing incorrect CC merging between adjacent text lines.
             for (tl in textLines) {
                 val r = tl.boundingRect
                 Imgproc.rectangle(
@@ -296,17 +291,24 @@ class CompleteMaskRefiner : MaskRefiner {
                 else intArrayOf(r[0], r[1], r[2] - r[0], r[3] - r[1])
             }
 
-            // --- Step 7: Bilateral filter on source image (CRF alt.) ---
-            // CRITICAL: Use procBitmap (resized) NOT bitmap (original).
-            // CC coordinates are in procBitmap space; using full-size bitmap would
-            // cause Otsu channel extraction to sample pixels at wrong positions,
-            // completely breaking per-CC boundary refinement (Python text_mask_utils.py
-            // L169 applies bilateralFilter to the resized img, not the original).
+            // --- Step 7: RGB Bilateral filter on source image (CRF alt.) ---
+            // Matches Python text_mask_utils.py L169: bilateralFilter(img, 17, 80, 80)
+            // Python applies bilateral filter to the RGB image (per-channel filtering),
+            // preserving color-specific edge information that grayscale conversion would lose.
+            // This is critical for detecting colored text (red/blue) on colored backgrounds.
             val imgMat = bitmapToMat(procBitmap).also { ownedMats.add(it) }
-            val imgGray = Mat().also { ownedMats.add(it) }
-            val imgGrayFiltered = Mat().also { ownedMats.add(it) }
-            Imgproc.cvtColor(imgMat, imgGray, Imgproc.COLOR_RGBA2GRAY)
-            Imgproc.bilateralFilter(imgGray, imgGrayFiltered, 17, 80.0, 80.0)
+            val imgRgb = Mat().also { ownedMats.add(it) }
+            Imgproc.cvtColor(imgMat, imgRgb, Imgproc.COLOR_RGBA2RGB)
+            val bfChannels = mutableListOf<Mat>()
+            Core.split(imgRgb, bfChannels)
+            val bfFiltered = mutableListOf<Mat>()
+            for (ch in bfChannels) {
+                val filtered = Mat().also { ownedMats.add(it) }
+                Imgproc.bilateralFilter(ch, filtered, 17, 80.0, 80.0)
+                bfFiltered.add(filtered)
+            }
+            val imgFiltered = Mat().also { ownedMats.add(it) }
+            Core.merge(bfFiltered, imgFiltered)
 
             // --- Step 8-9: Process each text line & build final mask ---
             val finalMask = Mat.zeros(height, width, CvType.CV_8UC1).also { ownedMats.add(it) }
@@ -337,41 +339,60 @@ class CompleteMaskRefiner : MaskRefiner {
 
                 val ccRect = org.opencv.core.Rect(x1, y1, w1, h1)
 
-                // --- CRF alternative: morphological close ---------------
+                // --- Color-guided mask expansion (DenseCRF approximation) ---
+                // Python text_mask_utils.py L184: cc_region = refine_mask(img_region, cc_region)
+                // DenseCRF uses the CC mask as unary prior and expands based on color similarity.
+                // We approximate this: dilate seed mask → compute mean text color → keep border
+                // pixels with similar color. This captures anti-aliased boundary pixels that
+                // per-channel Otsu misses (they have intermediate brightness, not "dark").
                 val closeKernel = Imgproc.getStructuringElement(
                     Imgproc.MORPH_ELLIPSE,
                     Size(dilateSize.toDouble(), dilateSize.toDouble()),
                 ).also { ownedMats.add(it) }
 
-                val ccSub = Mat(ccMask, ccRect)  // submat
-                Imgproc.morphologyEx(ccSub, ccSub, Imgproc.MORPH_CLOSE, closeKernel)
+                val ccSub = Mat(ccMask, ccRect)  // seed mask submat
 
-                // --- Python-like local refinement using the filtered image ---
-                val refineKernelSize = maxOf(3, ((dilateSize / 6) * 2) + 1)
-                val refineKernel = Imgproc.getStructuringElement(
+                val borderWidth = 5
+                val colorThresh = 300.0  // was 50.0 — see plan for numerical justification
+
+                // Step A: border zone = dilate(ccSub) - ccSub
+                val borderKernel = Imgproc.getStructuringElement(
                     Imgproc.MORPH_ELLIPSE,
-                    Size(refineKernelSize.toDouble(), refineKernelSize.toDouble()),
+                    Size(borderWidth * 2 + 1.0, borderWidth * 2 + 1.0),
                 ).also { ownedMats.add(it) }
-                val imgSub = Mat(imgGrayFiltered, ccRect)
-                val darkMask = Mat().also { ownedMats.add(it) }
-                val strongDarkMask = Mat().also { ownedMats.add(it) }
-                Imgproc.threshold(
-                    imgSub,
-                    darkMask,
-                    0.0,
-                    255.0,
-                    Imgproc.THRESH_BINARY_INV + Imgproc.THRESH_OTSU,
-                )
-                Imgproc.threshold(
-                    imgSub,
-                    strongDarkMask,
-                    232.0,
-                    255.0,
-                    Imgproc.THRESH_BINARY_INV,
-                )
-                Core.bitwise_or(darkMask, strongDarkMask, darkMask)
-                Imgproc.morphologyEx(darkMask, darkMask, Imgproc.MORPH_CLOSE, refineKernel)
-                Core.bitwise_or(ccSub, darkMask, ccSub)
+                val ccDilated = Mat().also { ownedMats.add(it) }
+                Imgproc.dilate(ccSub, ccDilated, borderKernel)
+                val borderZone = Mat().also { ownedMats.add(it) }
+                Core.subtract(ccDilated, ccSub, borderZone)
+
+                // Step B: mean text color (masked mean over seed region)
+                val imgSubRgb = Mat(imgFiltered, ccRect)  // submat
+                val meanColor = Core.mean(imgSubRgb, ccSub)  // Scalar(r, g, b)
+
+                // Step C: Manhattan color distance (float to avoid uint8 saturation)
+                val imgChannels = mutableListOf<Mat>()
+                Core.split(imgSubRgb, imgChannels)
+                val distSum = Mat.zeros(ccRect.height, ccRect.width, CvType.CV_32FC1)
+                    .also { ownedMats.add(it) }
+                for ((idx, ch) in imgChannels.withIndex()) {
+                    val absDiff = Mat().also { ownedMats.add(it) }
+                    Core.absdiff(ch, Scalar(meanColor.`val`[idx]), absDiff)
+                    val absDiffF = Mat().also { ownedMats.add(it) }
+                    absDiff.convertTo(absDiffF, CvType.CV_32FC1)
+                    Core.add(distSum, absDiffF, distSum)
+                }
+
+                // Step D: threshold → restrict to border zone
+                val colorSimMaskF = Mat().also { ownedMats.add(it) }
+                Imgproc.threshold(distSum, colorSimMaskF, colorThresh, 255.0,
+                    Imgproc.THRESH_BINARY_INV)
+                val colorSimMask = Mat().also { ownedMats.add(it) }
+                colorSimMaskF.convertTo(colorSimMask, CvType.CV_8UC1)
+                val borderExpansion = Mat().also { ownedMats.add(it) }
+                Core.bitwise_and(colorSimMask, borderZone, borderExpansion)
+
+                // Step E: OR into seed mask
+                Core.bitwise_or(ccSub, borderExpansion, ccSub)
 
                 // --- Further extend & dilate ----------------------------
                 val ext2 = (dilateSize + 1) / 2 // ceil(dilateSize / 2)
@@ -388,6 +409,9 @@ class CompleteMaskRefiner : MaskRefiner {
                 Core.bitwise_or(finalSub, dilateSub, finalSub)
             }
 
+            // DEBUG: clone raw mask BEFORE final dilation
+            val debugRawMask = finalMask.clone().also { ownedMats.add(it) }  // will be saved at the end
+
             // --- Step 10: Final dilation with caller‑specified kernel ----
             val finalKernel = Imgproc.getStructuringElement(
                 Imgproc.MORPH_ELLIPSE,
@@ -400,6 +424,10 @@ class CompleteMaskRefiner : MaskRefiner {
             // configuration explicitly enables it.
             if (ignoreBubble < 1 || ignoreBubble > 50) {
                 val resultBitmap = matToBitmap(finalMask)
+                // DEBUG: save BOTH masks (early return path)
+                debugSaveMask(matToBitmap(debugRawMask), "debug_mask_raw.png", bitmap.width, bitmap.height)
+                debugSaveMask(resultBitmap, "debug_mask_dilated.png", bitmap.width, bitmap.height)
+                debugRawMask.release()
                 return if (procScale < 1f) {
                     Bitmap.createScaledBitmap(resultBitmap, bitmap.width, bitmap.height, true)
                         .also { if (it !== resultBitmap) resultBitmap.recycle() }
@@ -448,6 +476,12 @@ class CompleteMaskRefiner : MaskRefiner {
 
             // --- Convert result to Bitmap --------------------------------
             val resultBitmap = matToBitmap(finalMask)
+
+            // DEBUG: save BOTH masks (raw before dilation + dilated after all processing)
+            debugSaveMask(matToBitmap(debugRawMask), "debug_mask_raw.png", bitmap.width, bitmap.height)
+            debugSaveMask(resultBitmap, "debug_mask_dilated.png", bitmap.width, bitmap.height)
+            debugRawMask.release()
+
             // Scale back to original dimensions if downscaled (matching Python L28)
             return if (procScale < 1f) {
                 Bitmap.createScaledBitmap(resultBitmap, bitmap.width, bitmap.height, true)
@@ -481,5 +515,31 @@ class CompleteMaskRefiner : MaskRefiner {
         val w1 = minOf(w + extend * 2, maxX - x1)
         val h1 = minOf(h + extend * 2, maxY - y1)
         return intArrayOf(x1, y1, maxOf(w1, 1), maxOf(h1, 1))
+    }
+
+    /**
+     * DEBUG: Save mask bitmap to phone storage for visual inspection.
+     * The mask is always upscaled to [origW]×[origH] before saving,
+     * so raw and dilated masks can be directly compared/overlaid.
+     * TODO: Remove this function after debugging is complete.
+     */
+    private fun debugSaveMask(mask: Bitmap, filename: String, origW: Int, origH: Int) {
+        try {
+            // Use app-private external dir — no permissions needed
+            val context = MangaTranslatorApp.appContext
+            val dir = context.getExternalFilesDir(null) ?: context.filesDir
+            val file = File(dir, filename)
+            // Upscale to original resolution if the mask is at a smaller scale
+            val toSave = if (mask.width != origW || mask.height != origH) {
+                Bitmap.createScaledBitmap(mask, origW, origH, false)
+            } else mask
+            FileOutputStream(file).use { out ->
+                toSave.compress(Bitmap.CompressFormat.PNG, 100, out)
+            }
+            if (toSave !== mask) toSave.recycle()
+            android.util.Log.d("CompleteMaskRefiner", "DEBUG $filename saved: ${file.absolutePath} ($origW x $origH)")
+        } catch (e: Exception) {
+            android.util.Log.e("CompleteMaskRefiner", "DEBUG $filename save FAILED", e)
+        }
     }
 }

@@ -45,7 +45,11 @@ fun PillToggle(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = if (state == ViewState.SOURCE) "Original" else "Translated",
+                    text = when (state) {
+                        ViewState.SOURCE -> "Original"
+                        ViewState.TRANSLATED -> "Translated"
+                        ViewState.DEBUG_BOXES -> "Detect"
+                    },
                     color = if (isSelected) Color(0xFF1A1C19) else Color(0xFF424944),
                     style = MaterialTheme.typography.labelLarge
                 )

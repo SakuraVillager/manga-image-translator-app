@@ -27,6 +27,7 @@ import org.opencv.core.MatOfPoint
 import org.opencv.core.*
 import org.opencv.imgproc.Imgproc
 import java.nio.FloatBuffer
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.sqrt
 
@@ -424,7 +425,13 @@ class CtdTextDetector private constructor(
             val factorX = scaleX / ratio
             val factorY = scaleY / ratio
             val scaledQuads = quadsInCropSpace.map { quad ->
-                val scaledPoints = quad.points.map { p -> PointF(p.x * factorX, p.y * factorY) }
+                // Match Python np.round for integer pixel coordinates (db_utils.py L167-168)
+                val scaledPoints = quad.points.map { p ->
+                    PointF(
+                        Math.round(p.x * factorX).toFloat(),
+                        Math.round(p.y * factorY).toFloat()
+                    )
+                }
                 quad.copy(points = Quadrilateral.sortPoints(scaledPoints).first)
             }
 
@@ -535,25 +542,40 @@ class CtdTextDetector private constructor(
             try {
                 if (results.size >= MAX_CANDIDATES) { continue }
 
-                val area = Imgproc.contourArea(contour)
-                if (area < 3.0) { filteredAreaCount++; continue }
+                // Match Python: filter by minAreaRect short side < 2
+                // (Python db_utils.py L149: if sside < min_size+2 where min_size=0 → sside < 2)
+                val p2fInit = MatOfPoint2f(*contour.toArray())
+                val initRect = Imgproc.minAreaRect(p2fInit)
+                val sside = minOf(initRect.size.width, initRect.size.height)
+                p2fInit.release()
+                if (sside < 2) { filteredAreaCount++; continue }
 
-                // 3. minAreaRect
+                // 3. minAreaRect for sside and unclip
                 point2f = MatOfPoint2f(*contour.toArray())
                 val rect = Imgproc.minAreaRect(point2f)
-                val rectPoints = Array(4) { Point() }
-                rect.points(rectPoints)
+                val area = Imgproc.contourArea(contour)
 
-                // 4. box_score_fast: mean of pred values inside rotated rect
-                val score = boxScoreFast(shrinkMap, rectPoints, h, w)
+                // 4. box_score_fast: use RAW contour points (matching Python db_utils.py L154)
+                val contourPts = contour.toArray()
+                val score = boxScoreFast(shrinkMap, contourPts, h, w)
+
+                // Debug: log contour details for diagnosis
+                if (score < boxThreshold + 0.1f) {
+                    val rectPtsDbg = Array(4) { Point() }
+                    rect.points(rectPtsDbg)
+                    val scoreRect = boxScoreFast(shrinkMap, rectPtsDbg, h, w)
+                    Log.d(TAG, "dbnetDecode: contour#${results.size} pts=${contourPts.size} sside=$sside area=$area scoreContour=$score scoreRect=$scoreRect")
+                }
+
                 if (score < boxThreshold) { filteredScoreCount++; Log.d(TAG, "dbnetDecode: contour score=$score < thresh=$boxThreshold, filtered"); continue }
 
-                // 5. Unclip polygon
+                // 5. Unclip polygon (edge-normal offset, matching Python pyclipper)
                 val perimeter = Imgproc.arcLength(point2f, true)
                 val unclipDist = area * unclipRatio / maxOf(perimeter, 1.0)
                 expanded = unclipPolygon(contour, unclipDist)
+                Log.d(TAG, "dbnetDecode: contour#${results.size} unclip: pts=${contourPts.size} unclipDist=$unclipDist expandedPts=${expanded.toArray().size}")
 
-                if (expanded.size().area() < 3.0) { filteredUnclipCount++; continue }
+                // Python has NO post-unclip area filter
 
                 // 6. minAreaRect of expanded polygon
                 expandedP2f = MatOfPoint2f(*expanded.toArray())
@@ -564,7 +586,7 @@ class CtdTextDetector private constructor(
                 val pts = expandedPts.map { PointF(it.x.toFloat(), it.y.toFloat()) }
                 // Ensure valid quadrilateral (non-zero area)
                 val quad = Quadrilateral(points = pts, text = "", probability = score)
-                if (quad.area < 1f) { filteredQuadCount++; continue }
+                if (quad.area < 0.5f) { filteredQuadCount++; continue }  // relaxed: only filter degenerate quads
 
                 results.add(quad)
             } catch (e: Exception) {
@@ -634,40 +656,85 @@ class CtdTextDetector private constructor(
     }
 
     // -----------------------------------------------------------------------
-    // unclip (centroid scaling)
+    // unclip (edge-normal polygon offset — approximates pyclipper)
     // -----------------------------------------------------------------------
 
     /**
-     * Expands [contour] outward by [distance] pixels along centroid→vertex
-     * rays.  Falls back to centroid scaling when the contour has too few
-     * vertices for a meaningful expansion.
+     * Expands [contour] outward by [distance] pixels using edge-normal offset,
+     * which closely approximates Python's pyclipper (JT_ROUND + ET_CLOSEDPOLYGON).
+     *
+     * For each vertex, the offset is computed from the intersection of the two
+     * adjacent offset edges, with miter-limit clamping to prevent degenerate spikes.
+     * Falls back to centroid scaling when the contour has too few vertices.
      */
     private fun unclipPolygon(contour: MatOfPoint, distance: Double): MatOfPoint {
         val points = contour.toArray()
-        if (points.size < 3) {
+        val n = points.size
+        if (n < 3) {
             return MatOfPoint(*points.map { it.clone() }.toTypedArray())
         }
 
-        // Centroid (mass center)
-        val moments = Imgproc.moments(contour)
-        val cx = moments.m10 / maxOf(moments.m00, 1e-6)
-        val cy = moments.m01 / maxOf(moments.m00, 1e-6)
-
-        val expandedPoints = points.map { p ->
-            val dx = p.x - cx
-            val dy = p.y - cy
+        // Compute outward edge normals
+        val edgeNormals = Array(n) { DoubleArray(2) }
+        for (i in 0 until n) {
+            val j = (i + 1) % n
+            val dx = points[j].x - points[i].x
+            val dy = points[j].y - points[i].y
             val len = sqrt(dx * dx + dy * dy)
             if (len < 1e-6) {
-                Point(p.x, p.y)
+                edgeNormals[i][0] = 0.0
+                edgeNormals[i][1] = 0.0
             } else {
-                Point(
-                    p.x + dx / len * distance,
-                    p.y + dy / len * distance,
+                // For CW polygon in screen coords (Y-down), outward normal is (-dy, dx)
+                edgeNormals[i][0] = -dy / len
+                edgeNormals[i][1] = dx / len
+            }
+        }
+
+        // Compute offset vertices using miter join
+        val expandedPoints = Array(n) { Point() }
+        for (i in 0 until n) {
+            val prev = (i - 1 + n) % n
+            val n1 = edgeNormals[prev] // normal of previous edge
+            val n2 = edgeNormals[i]   // normal of current edge
+
+            // Miter direction = average of adjacent normals
+            val mx = (n1[0] + n2[0]) / 2.0
+            val my = (n1[1] + n2[1]) / 2.0
+            val mLen = sqrt(mx * mx + my * my)
+
+            if (mLen < 1e-6) {
+                // Degenerate (opposite normals) — fall back to single normal
+                expandedPoints[i] = Point(
+                    points[i].x + n1[0] * distance,
+                    points[i].y + n1[1] * distance
+                )
+            } else {
+                // Normalize miter direction
+                val nmx = mx / mLen
+                val nmy = my / mLen
+
+                // Miter length: distance / cos(half-angle)
+                // cos(half-angle) = dot(normalized_miter, edge_normal)
+                val dot = nmx * n1[0] + nmy * n1[1]
+                val miterLen = if (abs(dot) > 0.1) {
+                    distance / dot
+                } else {
+                    distance // Nearly parallel edges — clamp
+                }
+
+                // Miter limit to prevent degenerate spikes (like pyclipper JT_ROUND)
+                val maxMiter = distance * 2.5
+                val clampedLen = minOf(miterLen, maxMiter)
+
+                expandedPoints[i] = Point(
+                    points[i].x + nmx * clampedLen,
+                    points[i].y + nmy * clampedLen
                 )
             }
         }
 
-        return MatOfPoint(*expandedPoints.toTypedArray())
+        return MatOfPoint(*expandedPoints)
     }
 
     // -----------------------------------------------------------------------

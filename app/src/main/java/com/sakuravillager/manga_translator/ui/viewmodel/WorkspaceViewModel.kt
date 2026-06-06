@@ -16,6 +16,7 @@ import com.sakuravillager.manga_translator.translation.model.ModelDownloadManage
 import com.sakuravillager.manga_translator.translation.pipeline.TranslationPipeline
 import com.sakuravillager.manga_translator.translation.pipeline.TranslationProgress
 import com.sakuravillager.manga_translator.translation.pipeline.TranslationResult
+import com.sakuravillager.manga_translator.translation.util.VisualizeUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -34,6 +35,7 @@ data class WorkspaceUiState(
     val selectedLanguage: String = "JPN",
     val resultBitmap: Bitmap? = null,
     val inputBitmap: Bitmap? = null,
+    val debugBitmap: Bitmap? = null,
     val progress: TranslationProgress = TranslationProgress.Idle,
     val isTranslating: Boolean = false,
     val errorMessage: String? = null,
@@ -119,9 +121,22 @@ class WorkspaceViewModel(
                         "WorkspaceViewModel",
                         "Translation succeeded: regions=${result.textRegions.size}"
                     )
+                    // Generate debug visualization: bounding boxes on input image
+                    val debugBmp = try {
+                        VisualizeUtils.visualizeTextBlocks(
+                            bitmap.copy(Bitmap.Config.ARGB_8888, true),
+                            result.textRegions,
+                            showPanels = false,
+                            rightToLeft = true,
+                        )
+                    } catch (e: Exception) {
+                        AppLogger.w("WorkspaceViewModel", "Failed to generate debug bitmap: ${e.message}")
+                        null
+                    }
                     _uiState.value = _uiState.value.copy(
                         resultBitmap = result.bitmap,
                         inputBitmap = bitmap,
+                        debugBitmap = debugBmp,
                         errorMessage = null,
                         noTextDetected = false,
                         progress = TranslationProgress.Done(result.bitmap),
@@ -200,9 +215,24 @@ class WorkspaceViewModel(
                 val firstResult = results.firstOrNull()
                 when (firstResult) {
                     is TranslationResult.Success -> {
+                        val inputBmp = bitmaps.firstOrNull()
+                        val debugBmp = try {
+                            inputBmp?.let {
+                                VisualizeUtils.visualizeTextBlocks(
+                                    it.copy(Bitmap.Config.ARGB_8888, true),
+                                    firstResult.textRegions,
+                                    showPanels = false,
+                                    rightToLeft = true,
+                                )
+                            }
+                        } catch (e: Exception) {
+                            AppLogger.w("WorkspaceViewModel", "Failed to generate debug bitmap (batch): ${e.message}")
+                            null
+                        }
                         _uiState.value = _uiState.value.copy(
                             resultBitmap = firstResult.bitmap,
-                            inputBitmap = bitmaps.firstOrNull(),
+                            inputBitmap = inputBmp,
+                            debugBitmap = debugBmp,
                             errorMessage = null,
                             noTextDetected = false,
                             progress = TranslationProgress.Done(firstResult.bitmap),

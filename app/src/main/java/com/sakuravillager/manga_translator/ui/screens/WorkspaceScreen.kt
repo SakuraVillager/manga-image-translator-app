@@ -193,20 +193,40 @@ fun WorkspaceScreen(
                     .clip(RoundedCornerShape(24.dp))
                     .background(Color(0xFFE1E5E1))
             ) {
-                if (uiState.resultBitmap != null && uiState.viewState == ViewState.TRANSLATED) {
-                    Image(
-                        bitmap = uiState.resultBitmap!!.asImageBitmap(),
-                        contentDescription = "Translated manga image",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
-                } else {
-                    AsyncImage(
-                        model = imageUris.firstOrNull(),
-                        contentDescription = "Selected manga image",
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize()
-                    )
+                when {
+                    uiState.viewState == ViewState.DEBUG_BOXES && uiState.debugBitmap != null -> {
+                        Image(
+                            bitmap = uiState.debugBitmap!!.asImageBitmap(),
+                            contentDescription = "Debug text detection boxes",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                    uiState.viewState == ViewState.DEBUG_BOXES && uiState.debugBitmap == null -> {
+                        // No debug bitmap available — fall back to source
+                        AsyncImage(
+                            model = imageUris.firstOrNull(),
+                            contentDescription = "Selected manga image (no debug data)",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                    uiState.resultBitmap != null && uiState.viewState == ViewState.TRANSLATED -> {
+                        Image(
+                            bitmap = uiState.resultBitmap!!.asImageBitmap(),
+                            contentDescription = "Translated manga image",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                    else -> {
+                        AsyncImage(
+                            model = imageUris.firstOrNull(),
+                            contentDescription = "Selected manga image",
+                            contentScale = ContentScale.Crop,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
                 }
             }
 

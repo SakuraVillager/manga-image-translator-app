@@ -144,9 +144,9 @@ object VisualizeUtils {
      */
     private fun drawBoundingRect(canvas: Canvas, block: TextBlock, color: Int) {
         val paint = Paint().apply {
-            this.color = color
+            this.color = Color.RED
             style = Paint.Style.STROKE
-            strokeWidth = 2f
+            strokeWidth = 4f
             isAntiAlias = true
         }
 
@@ -163,11 +163,11 @@ object VisualizeUtils {
             }
         }
 
-        // Also draw the outer bounding rect with a thinner stroke for reference
+        // Also draw the outer bounding rect with a slightly thinner stroke for reference
         val rectPaint = Paint().apply {
-            this.color = color
+            this.color = Color.RED
             style = Paint.Style.STROKE
-            strokeWidth = 1f
+            strokeWidth = 2f
             isAntiAlias = true
         }
         val rect = block.minRect

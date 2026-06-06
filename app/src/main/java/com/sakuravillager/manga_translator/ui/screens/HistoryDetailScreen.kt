@@ -91,7 +91,8 @@ fun HistoryDetailScreen(
                 val currentHistory = history
                 if (currentHistory != null) {
                     val imageUri = when (viewState) {
-                        com.sakuravillager.manga_translator.data.model.ViewState.SOURCE ->
+                        com.sakuravillager.manga_translator.data.model.ViewState.SOURCE,
+                        com.sakuravillager.manga_translator.data.model.ViewState.DEBUG_BOXES ->
                             currentHistory.imagePath
                         com.sakuravillager.manga_translator.data.model.ViewState.TRANSLATED ->
                             currentHistory.resultImagePath ?: currentHistory.coverImageUri
