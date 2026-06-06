@@ -987,6 +987,14 @@ class TranslationPipeline(
                 translatorConfig,
             )
 
+            // DEBUG: log translator output for diagnosis
+            Log.d(TAG, "translateWithValidationRetry: attempt=$attempt translator=${config.translator.translator} " +
+                "from=${fromLanguage ?: "auto"} to=${config.translator.targetLanguage} " +
+                "inputSize=${translatableTexts.size} outputSize=${candidateTranslations.size}")
+            candidateTranslations.take(3).forEachIndexed { i, t ->
+                Log.d(TAG, "  candidateTranslation[$i]: '${t.take(30)}' (len=${t.length})")
+            }
+
             // 1. Assign translations
             val remappedTranslations = MutableList(regions.size) { "" }
             translatableIndices.forEachIndexed { orderedIndex, originalIndex ->
@@ -1017,6 +1025,15 @@ class TranslationPipeline(
 
             // 5. Post-dictionary (matches Python L1215-1226)
             processedRegions = applyPostDictionary(processedRegions, config)
+
+            // 5b. Safeguard: ensure no translation is blank after processing
+            //     (ORIGINAL mode or same-language scenarios may produce blank translations)
+            processedRegions = processedRegions.map { region ->
+                if (region.translation.isBlank() && region.text.isNotBlank()) {
+                    Log.w(TAG, "Safeguard: blank translation for '${region.text.take(30)}', using text as fallback")
+                    region.copy(translation = region.text)
+                } else region
+            }
 
             // 6. Hallucination detection + per-region retry (matches Python L1230-1242)
             if (config.enablePostTranslationCheck) {
@@ -1314,7 +1331,10 @@ class TranslationPipeline(
 
         val result = regions.mapNotNull { region ->
             val translation = region.translation
-            if (translation.isBlank()) { filteredBlank++; return@mapNotNull null }
+            if (translation.isBlank()) {
+                Log.w(TAG, "FILTER blank: text='${region.text.take(40)}' translation='' len=${translation.length}")
+                filteredBlank++; return@mapNotNull null
+            }
 
             val sourceLanguage = languageDetector.detect(region.text).language
             if (skipLanguages.isNotEmpty() && sourceLanguage in skipLanguages) {
